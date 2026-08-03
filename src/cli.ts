@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   addStatus,
@@ -260,7 +260,7 @@ export function run(
 /* c8 ignore start -- process entry glue is covered by the CLI integration tests through run(). */
 if (
   process.argv[1] &&
-  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+  import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 ) {
   try {
     run(process.argv.slice(2));

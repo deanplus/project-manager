@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { run } from "../src/cli.js";
 import {
   addStatus,
@@ -184,6 +186,26 @@ test("database path has a stable default and environment override creates its pa
     databasePath(),
     join(homedir(), ".local", "share", "project-mgr", "project-mgr.sqlite"),
   );
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test("CLI runs through a package-style symlink", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pmgr-bin-"));
+  const executable = join(directory, "pmgr");
+  symlinkSync(
+    fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
+    executable,
+  );
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", executable, "current", "--json"],
+    {
+      encoding: "utf8",
+      env: { ...process.env, PMGR_DB_PATH: ":memory:" },
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "[]\n");
   rmSync(directory, { recursive: true, force: true });
 });
 

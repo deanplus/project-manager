@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.3 - 2026-08-03
+
+### Added
+
+- Packaged the `project-mgr-status` Agent Skill for status ledger operations.
+
+### Fixed
+
+- Made the CLI run through npm-created `pmgr` symlinks and corrected the no-install examples.
+
 ## 0.1.2 - 2026-08-03
 
 ### Changed

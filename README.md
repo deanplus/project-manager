@@ -4,7 +4,7 @@
 
 `project-mgr` is a local-first, append-only ledger for project status. It stores progress, blockers, decisions, and next steps as timestamped status snapshots, so people and AI agents can quickly inspect each project's current state, complete history, or state at a particular time.
 
-The first release provides only a local CLI and SQLite. It has no HTTP API, long-running service, or agent skills. Data stays on the local machine and requires no account or cloud service.
+The first release provides a local CLI, SQLite, and an optional Agent Skill. It has no HTTP API or long-running service. Data stays on the local machine and requires no account or cloud service.
 
 ## Run from npm
 
@@ -13,7 +13,7 @@ Requires Node.js 22+.
 Run without installing:
 
 ```bash
-npx --yes project-mgr current
+npx --yes --package project-mgr pmgr current
 ```
 
 Or install the CLI globally:
@@ -28,8 +28,22 @@ The database defaults to `~/.local/share/project-mgr/project-mgr.sqlite`, regard
 Set `PMGR_DB_PATH` to use another location:
 
 ```bash
-PMGR_DB_PATH=/absolute/path/projects.sqlite npx --yes project-mgr current
+PMGR_DB_PATH=/absolute/path/projects.sqlite npx --yes --package project-mgr pmgr current
 ```
+
+## Install the Agent Skill
+
+The repository includes `skills/project-mgr-status`, which guides compatible AI agents to add, import, query, and export status records. Install it with the [skills CLI](https://skills.sh/docs/cli):
+
+```bash
+npx skills add deanplus/project-manager
+```
+
+The installer detects supported agents and asks where to install the skill. No separate `project-mgr` installation is required: the skill runs the CLI through `npx`. Restart or reload the selected agent after installation.
+
+The skill uses the same `PMGR_DB_PATH` behavior as the CLI: it defaults to `~/.local/share/project-mgr/project-mgr.sqlite`; set an absolute path to work in another ledger. For manual or exploratory work, use a dedicated database such as `PMGR_DB_PATH=/tmp/project-mgr-skill-test.sqlite` rather than the default ledger.
+
+Then ask the agent, for example: `Use project-mgr-status to add an active status for project-mgr after checking its current status.`
 
 ## Build from source
 
