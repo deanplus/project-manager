@@ -221,7 +221,6 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
   };
   const added = JSON.parse(
     execute([
-      "status",
       "add",
       "--project",
       "cli",
@@ -256,10 +255,7 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
     ]),
     /human output/,
   );
-  assert.match(
-    execute(["status", "import", importFile, "--json"]),
-    /from file/,
-  );
+  assert.match(execute(["import", importFile, "--json"]), /from file/);
   assert.match(
     execute(["status", "import", "--file", jsonFile, "--json"]),
     /one JSON object/,
@@ -268,11 +264,11 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
     execute(["status", "import", arrayFile, "--json"]),
     /JSON array/,
   );
+  assert.match(execute(["current"]), /cli\tactive/);
   assert.match(execute(["status", "current"]), /cli\tactive/);
   assert.equal(
     JSON.parse(
       execute([
-        "status",
         "history",
         "--project",
         "cli",
@@ -296,7 +292,6 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
   assert.equal(
     JSON.parse(
       execute([
-        "status",
         "at",
         "--project",
         "cli",
@@ -322,7 +317,7 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
     null,
   );
   assert.match(
-    execute(["status", "export", "--project", "cli", "--format", "jsonl"]),
+    execute(["export", "--project", "cli", "--format", "jsonl"]),
     /"project":"cli"/,
   );
   const exported = execute(["status", "export", "--format", "json"]);
@@ -330,9 +325,14 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
   assert.doesNotMatch(exported, /"recordedAt"|"id"/);
   assert.match(execute(["status", "export"]), /imported/);
   assert.equal(
-    execute(["status", "export", "--project", "missing", "--format", "jsonl"]),
+    execute(["export", "--project", "missing", "--format", "jsonl"]),
     "",
   );
+  assert.equal(
+    execute(["history", "--project", "missing"]),
+    "No entries found.\n",
+  );
+  assert.equal(execute(["history", "--project", "missing", "--json"]), "[]\n");
   assert.throws(
     () => execute(["status", "history", "--project", "cli", "--limit", "-1"]),
     ValidationError,
@@ -359,6 +359,8 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
   );
   assert.throws(() => execute(["status", "import"]), ValidationError);
   assert.throws(() => execute(["wat"]), ValidationError);
+  assert.throws(() => execute([]), ValidationError);
+  assert.throws(() => execute(["status"]), ValidationError);
   assert.throws(() => execute(["status", "wat"]), ValidationError);
   assert.throws(() => execute(["status", "toString"]), ValidationError);
   assert.throws(

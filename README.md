@@ -21,13 +21,13 @@ pnpm build
 After building, run:
 
 ```bash
-pnpm start status current
+pnpm start current
 ```
 
 During development, run the TypeScript CLI directly:
 
 ```bash
-pnpm pmgr status current
+pnpm pmgr current
 ```
 
 The default configuration in `.env_sample` is:
@@ -39,7 +39,7 @@ PMGR_DB_PATH=./data/project-mgr.sqlite
 Set `PMGR_DB_PATH` in `.env` to use another location, or override it for one command:
 
 ```bash
-PMGR_DB_PATH=/absolute/path/projects.sqlite pnpm start status current
+PMGR_DB_PATH=/absolute/path/projects.sqlite pnpm start current
 ```
 
 Relative paths are resolved from the working directory of the command. When `pnpm start ...` runs from this project's root, the default database is `./data/project-mgr.sqlite`. It is created automatically when the first valid command runs.
@@ -55,13 +55,15 @@ PMGR_DB_PATH=./data/manual-test.sqlite
 Then run commands normally:
 
 ```bash
-pnpm start status add \
+pnpm start add \
   --project test-project \
   --status active \
   --summary "Testing the isolated database"
 
-pnpm start status current --json
+pnpm start history --project test-project
 ```
+
+Project keys must match exactly: a record added to `test-project` is not part of `project-mgr` history. Empty human-readable list queries print `No entries found.`; with `--json`, they print `[]`.
 
 `data/` is ignored by Git, so test data is not committed. Delete `data/manual-test.sqlite` when it is no longer needed.
 
@@ -72,7 +74,7 @@ Automated tests use an in-memory database or SQLite files in the system temporar
 Append a project status:
 
 ```bash
-pnpm start status add \
+pnpm start add \
   --project project-mgr \
   --status active \
   --summary "The local status ledger is available" \
@@ -84,20 +86,20 @@ pnpm start status add \
 Query the current status of all projects or one project:
 
 ```bash
-pnpm start status current
-pnpm start status current --project project-mgr --json
+pnpm start current
+pnpm start current --project project-mgr --json
 ```
 
 Query history and the status at a specified time:
 
 ```bash
-pnpm start status history \
+pnpm start history \
   --project project-mgr \
   --since 2026-08-01T00:00:00Z \
   --limit 20 \
   --offset 0
 
-pnpm start status at \
+pnpm start at \
   --project project-mgr \
   --at 2026-08-03T12:00:00+08:00 \
   --json
@@ -105,7 +107,7 @@ pnpm start status at \
 
 ## Write status
 
-`status add` requires:
+`add` requires:
 
 - `--project`: Unique project name. It may contain English letters, numbers, `.`, `_`, and `-`, and must start with a letter or number.
 - `--status`: One of `idea`, `planned`, `active`, `blocked`, `paused`, `completed`, or `archived`.
@@ -122,7 +124,7 @@ Optional arguments:
 
 ## Bulk import
 
-`status import` accepts a JSON object, a JSON array, or a JSONL file containing one object per line. Every record is validated before the whole batch is written in one SQLite transaction; any failure rolls back the entire batch.
+`import` accepts a JSON object, a JSON array, or a JSONL file containing one object per line. Every record is validated before the whole batch is written in one SQLite transaction; any failure rolls back the entire batch.
 
 ```json
 {
@@ -141,31 +143,31 @@ Optional arguments:
 ```
 
 ```bash
-pnpm start status import statuses.jsonl
+pnpm start import statuses.jsonl
 # Equivalent form
-pnpm start status import --file statuses.jsonl --json
+pnpm start import --file statuses.jsonl --json
 ```
 
 Unknown fields, unknown CLI options, extra positional arguments, invalid statuses, and timestamps without a timezone are rejected.
 
 ## Query and export
 
-| Command          | Purpose                                         | Key options                                                        |
-| ---------------- | ----------------------------------------------- | ------------------------------------------------------------------ |
-| `status current` | Current status for all projects or one project  | `--project`, `--json`                                              |
-| `status history` | One project's history, newest first             | `--project`, `--since`, `--until`, `--limit`, `--offset`, `--json` |
-| `status at`      | The latest status at or before a specified time | `--project`, `--at`, `--json`                                      |
-| `status export`  | Export all records or one project's records     | `--project`, `--format json\|jsonl`                                |
+| Command   | Purpose                                         | Key options                                                        |
+| --------- | ----------------------------------------------- | ------------------------------------------------------------------ |
+| `current` | Current status for all projects or one project  | `--project`, `--json`                                              |
+| `history` | One project's history, newest first             | `--project`, `--since`, `--until`, `--limit`, `--offset`, `--json` |
+| `at`      | The latest status at or before a specified time | `--project`, `--at`, `--json`                                      |
+| `export`  | Export all records or one project's records     | `--project`, `--format json\|jsonl`                                |
 
-Human-readable multi-record results list project, status, occurrence time, and summary. `add`, `import`, `current`, `history`, and `at` support `--json`; `export` uses `--format` to select its format.
+All six actions can also use the compatible `status <action>` form, for example `pmgr status export`. Human-readable multi-record results list project, status, occurrence time, and summary, or `No entries found.` when empty. `add`, `import`, `current`, `history`, and `at` support `--json`; `export` uses `--format` to select its format.
 
 Exports omit the database-internal `id` and `recordedAt` fields and can be imported directly. Records are exported from oldest to newest so that restoring them preserves the insertion order of records with the same timestamp:
 
 ```bash
-pnpm start status export --format jsonl > project-statuses.jsonl
+pnpm start export --format jsonl > project-statuses.jsonl
 
 PMGR_DB_PATH=./data/restored.sqlite \
-  pnpm start status import project-statuses.jsonl
+  pnpm start import project-statuses.jsonl
 ```
 
 ## Development and verification

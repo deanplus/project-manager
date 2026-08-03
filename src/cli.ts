@@ -73,14 +73,16 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
   ["export", new Set(["project", "format"])],
 ]);
 
-function validateInvocation(command: string[], flags: Flags): void {
-  const action = command[1] ?? "";
-  const allowed = allowedFlags.get(action);
-  if (command[0] !== "status" || !allowed)
+function validateInvocation(command: string[], flags: Flags): string {
+  const statusCommand = command[0] === "status";
+  const action = command[statusCommand ? 1 : 0];
+  const allowed =
+    typeof action === "string" ? allowedFlags.get(action) : undefined;
+  if (typeof action !== "string" || !allowed)
     throw new ValidationError(
-      "usage: pmgr status <add|import|current|history|at|export>",
+      "usage: pmgr <add|import|current|history|at|export> (or: pmgr status <action>)",
     );
-  const positional = command.slice(2);
+  const positional = command.slice(statusCommand ? 2 : 1);
   if (action === "import") {
     if (positional.length > 1)
       throw new ValidationError("import accepts at most one file argument");
@@ -94,6 +96,7 @@ function validateInvocation(command: string[], flags: Flags): void {
   for (const key of Object.keys(flags))
     if (!allowed.has(key))
       throw new ValidationError(`unknown flag for ${action}: --${key}`);
+  return action;
 }
 
 function stringFlag(
@@ -125,11 +128,15 @@ function output(
   write: (text: string) => void,
 ): void {
   if (json) write(`${JSON.stringify(value)}\n`);
-  else if (Array.isArray(value))
-    write(
-      `${value.map((entry) => `${entry.project}\t${entry.status}\t${entry.occurredAt}\t${entry.summary}`).join("\n")}\n`,
-    );
-  else write(`${JSON.stringify(value, null, 2)}\n`);
+  else if (Array.isArray(value)) {
+    const rows = value
+      .map(
+        (entry) =>
+          `${entry.project}\t${entry.status}\t${entry.occurredAt}\t${entry.summary}`,
+      )
+      .join("\n");
+    write(`${rows || "No entries found."}\n`);
+  } else write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
 function imported(file: string): unknown[] {
@@ -160,11 +167,11 @@ export function run(
   write = process.stdout.write.bind(process.stdout),
 ): void {
   const { command, flags } = parse(argv);
-  validateInvocation(command, flags);
+  const action = validateInvocation(command, flags);
   const db = openLedger();
   const json = flags.json === true;
   try {
-    switch (command[1]) {
+    switch (action) {
       case "add":
         output(
           addStatus(db, {
@@ -188,7 +195,11 @@ export function run(
         output(
           importStatuses(
             db,
-            imported(stringFlag(flags, "file") ?? command[2] ?? ""),
+            imported(
+              stringFlag(flags, "file") ??
+                command[command[0] === "status" ? 2 : 1] ??
+                "",
+            ),
           ).map((result) => result.entry),
           json,
           write,

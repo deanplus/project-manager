@@ -30,6 +30,8 @@ SQLite file
 
 `src/index.ts` exports only public types and functions. Business validation does not depend on the CLI, so bulk imports and direct database API calls use the same rules.
 
+The CLI accepts `pmgr <action>` for `add`, `import`, `current`, `history`, `at`, and `export`; `pmgr status <action>` remains a compatible form. Both forms share the same validation and execution path.
+
 ## Data model
 
 The database contains three structures:

@@ -21,13 +21,13 @@ pnpm build
 构建后通过以下方式运行：
 
 ```bash
-pnpm start status current
+pnpm start current
 ```
 
 开发时也可以直接运行 TypeScript：
 
 ```bash
-pnpm pmgr status current
+pnpm pmgr current
 ```
 
 默认配置位于 `.env_sample`：
@@ -39,7 +39,7 @@ PMGR_DB_PATH=./data/project-mgr.sqlite
 通过 `.env` 中的 `PMGR_DB_PATH` 指定其他位置，也可以为单条命令临时覆盖：
 
 ```bash
-PMGR_DB_PATH=/absolute/path/projects.sqlite pnpm start status current
+PMGR_DB_PATH=/absolute/path/projects.sqlite pnpm start current
 ```
 
 路径基于启动命令的当前工作目录计算。从本项目根目录执行 `pnpm start ...` 时，默认位置就是 `./data/project-mgr.sqlite`。数据库会在第一次执行有效命令时自动创建。
@@ -55,13 +55,15 @@ PMGR_DB_PATH=./data/manual-test.sqlite
 随后正常执行命令：
 
 ```bash
-pnpm start status add \
+pnpm start add \
   --project test-project \
   --status active \
   --summary "测试独立数据库"
 
-pnpm start status current --json
+pnpm start history --project test-project
 ```
+
+项目键必须完全一致：写入 `test-project` 的记录不会出现在 `project-mgr` 的历史中。人类可读的空列表查询会输出 `No entries found.`；使用 `--json` 时则输出 `[]`。
 
 `data/` 已加入 Git ignore，测试数据不会进入版本库。不需要保留时，可以删除 `data/manual-test.sqlite`。
 
@@ -72,7 +74,7 @@ pnpm start status current --json
 追加一条项目状态：
 
 ```bash
-pnpm start status add \
+pnpm start add \
   --project project-mgr \
   --status active \
   --summary "本地状态账本已可用" \
@@ -84,20 +86,20 @@ pnpm start status add \
 查询所有项目或单个项目的当前状态：
 
 ```bash
-pnpm start status current
-pnpm start status current --project project-mgr --json
+pnpm start current
+pnpm start current --project project-mgr --json
 ```
 
 查询历史与指定时间点状态：
 
 ```bash
-pnpm start status history \
+pnpm start history \
   --project project-mgr \
   --since 2026-08-01T00:00:00Z \
   --limit 20 \
   --offset 0
 
-pnpm start status at \
+pnpm start at \
   --project project-mgr \
   --at 2026-08-03T12:00:00+08:00 \
   --json
@@ -105,7 +107,7 @@ pnpm start status at \
 
 ## 状态写入
 
-`status add` 必须提供：
+`add` 必须提供：
 
 - `--project`：项目唯一名称，只能使用英文字母、数字、`.`、`_`、`-`，并以字母或数字开头。
 - `--status`：`idea`、`planned`、`active`、`blocked`、`paused`、`completed` 或 `archived`。
@@ -122,7 +124,7 @@ pnpm start status at \
 
 ## 批量导入
 
-`status import` 接受一个 JSON 对象、JSON 数组，或每行一个对象的 JSONL 文件。所有记录先校验，再在同一个 SQLite 事务中写入；任一记录失败时整批回滚。
+`import` 接受一个 JSON 对象、JSON 数组，或每行一个对象的 JSONL 文件。所有记录先校验，再在同一个 SQLite 事务中写入；任一记录失败时整批回滚。
 
 ```json
 {
@@ -141,31 +143,31 @@ pnpm start status at \
 ```
 
 ```bash
-pnpm start status import statuses.jsonl
+pnpm start import statuses.jsonl
 # 等价写法
-pnpm start status import --file statuses.jsonl --json
+pnpm start import --file statuses.jsonl --json
 ```
 
 未知字段、未知 CLI 参数、多余位置参数、非法状态和无时区时间都会被拒绝。
 
 ## 查询与导出
 
-| 命令             | 用途                       | 主要选项                                                           |
-| ---------------- | -------------------------- | ------------------------------------------------------------------ |
-| `status current` | 所有项目或单项目的当前状态 | `--project`、`--json`                                              |
-| `status history` | 单项目历史，最新记录在前   | `--project`、`--since`、`--until`、`--limit`、`--offset`、`--json` |
-| `status at`      | 指定时间点及之前的最后状态 | `--project`、`--at`、`--json`                                      |
-| `status export`  | 导出全部或单项目记录       | `--project`、`--format json\|jsonl`                                |
+| 命令      | 用途                       | 主要选项                                                           |
+| --------- | -------------------------- | ------------------------------------------------------------------ |
+| `current` | 所有项目或单项目的当前状态 | `--project`、`--json`                                              |
+| `history` | 单项目历史，最新记录在前   | `--project`、`--since`、`--until`、`--limit`、`--offset`、`--json` |
+| `at`      | 指定时间点及之前的最后状态 | `--project`、`--at`、`--json`                                      |
+| `export`  | 导出全部或单项目记录       | `--project`、`--format json\|jsonl`                                |
 
-人类可读的多条结果按“项目、状态、发生时间、摘要”输出。`add`、`import`、`current`、`history`、`at` 支持 `--json`；`export` 由 `--format` 控制格式。
+全部六个 action 仍可使用 `status <action>` 的兼容形式，例如 `pmgr status export`。人类可读的多条结果按“项目、状态、发生时间、摘要”输出；为空时输出 `No entries found.`。`add`、`import`、`current`、`history`、`at` 支持 `--json`；`export` 由 `--format` 控制格式。
 
 导出内容不包含数据库内部的 `id` 和 `recordedAt`，可以直接重新导入。记录按时间从旧到新导出，从而在恢复时保留相同时间戳记录的先后关系：
 
 ```bash
-pnpm start status export --format jsonl > project-statuses.jsonl
+pnpm start export --format jsonl > project-statuses.jsonl
 
 PMGR_DB_PATH=./data/restored.sqlite \
-  pnpm start status import project-statuses.jsonl
+  pnpm start import project-statuses.jsonl
 ```
 
 ## 开发与验证
