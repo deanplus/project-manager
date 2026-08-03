@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.2 - 2026-08-03
+
+### Changed
+
+- Moved the default database from the command's working directory to the stable per-user path `~/.local/share/project-mgr/project-mgr.sqlite`.
+
 ## 0.1.1 - 2026-08-03
 
 ### Changed

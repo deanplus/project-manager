@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { run } from "../src/cli.js";
@@ -171,7 +171,7 @@ test("import validates before transaction and default source is import", () => {
   db.close();
 });
 
-test("database path uses environment override and file migration creates parent directory", () => {
+test("database path has a stable default and environment override creates its parent directory", () => {
   const directory = mkdtempSync(join(tmpdir(), "pmgr-"));
   const previous = process.env.PMGR_DB_PATH;
   process.env.PMGR_DB_PATH = join(directory, "nested", "ledger.sqlite");
@@ -180,7 +180,10 @@ test("database path uses environment override and file migration creates parent 
   db.close();
   if (previous === undefined) delete process.env.PMGR_DB_PATH;
   else process.env.PMGR_DB_PATH = previous;
-  assert.match(databasePath(), /data\/project-mgr\.sqlite$/);
+  assert.equal(
+    databasePath(),
+    join(homedir(), ".local", "share", "project-mgr", "project-mgr.sqlite"),
+  );
   rmSync(directory, { recursive: true, force: true });
 });
 

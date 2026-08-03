@@ -57,7 +57,7 @@ The `project_id, occurred_at DESC, id DESC` index supports current-status and hi
 
 After opening the database, `openLedger()` enables foreign keys, creates the migration table, and checks for and applies migration 1 within a `BEGIN IMMEDIATE` transaction. The immediate transaction prevents migration checks and writes from interleaving when several local processes open the database for the first time at once.
 
-The database path is read from `PMGR_DB_PATH` first; otherwise, it uses `data/project-mgr.sqlite` in the process working directory. Non-memory databases create their parent directory automatically.
+The database path is read from `PMGR_DB_PATH` first; otherwise, it uses the absolute path `~/.local/share/project-mgr/project-mgr.sqlite`, resolved from the current user's home directory. Non-memory databases create their parent directory automatically.
 
 ## Write flow
 

@@ -23,7 +23,9 @@ npm install --global project-mgr
 pmgr current
 ```
 
-数据库默认位于当前工作目录下的 `./data/project-mgr.sqlite`。通过 `PMGR_DB_PATH` 指定其他位置：
+无论在哪个目录执行 `pmgr`，数据库都默认位于 `~/.local/share/project-mgr/project-mgr.sqlite`。CLI 会根据当前用户的主目录将其解析为绝对路径，并自动创建父目录。
+
+通过 `PMGR_DB_PATH` 指定其他位置：
 
 ```bash
 PMGR_DB_PATH=/absolute/path/projects.sqlite npx --yes project-mgr current
@@ -53,26 +55,26 @@ pnpm start current
 pnpm pmgr current
 ```
 
-默认配置位于 `.env_sample`：
+默认数据库路径是：
 
-```dotenv
-PMGR_DB_PATH=./data/project-mgr.sqlite
+```text
+~/.local/share/project-mgr/project-mgr.sqlite
 ```
 
-通过 `.env` 中的 `PMGR_DB_PATH` 指定其他位置，也可以为单条命令临时覆盖：
+`.env_sample` 中的 `PMGR_DB_PATH` 是可选配置。可以在 `.env` 中指定其他位置，也可以为单条命令临时覆盖：
 
 ```bash
 PMGR_DB_PATH=/absolute/path/projects.sqlite pnpm start current
 ```
 
-路径基于启动命令的当前工作目录计算。从本项目根目录执行 `pnpm start ...` 时，默认位置就是 `./data/project-mgr.sqlite`。数据库会在第一次执行有效命令时自动创建。
+在 `.env` 中应填写字面量绝对路径；`.env` 文件不会展开 `~` 或 `$HOME`。数据库会在第一次执行有效命令时自动创建。
 
 ### 使用独立测试数据库
 
 手工测试时，建议在 `.env` 中固定设置一个与正式数据分离的路径：
 
 ```dotenv
-PMGR_DB_PATH=./data/manual-test.sqlite
+PMGR_DB_PATH=/tmp/project-mgr-manual-test.sqlite
 ```
 
 随后正常执行命令：
@@ -88,7 +90,7 @@ pnpm start history --project test-project
 
 项目键必须完全一致：写入 `test-project` 的记录不会出现在 `project-mgr` 的历史中。人类可读的空列表查询会输出 `No entries found.`；使用 `--json` 时则输出 `[]`。
 
-`data/` 已加入 Git ignore，测试数据不会进入版本库。不需要保留时，可以删除 `data/manual-test.sqlite`。
+不需要保留时，可以删除 `/tmp/project-mgr-manual-test.sqlite`。
 
 自动化测试会使用内存数据库或系统临时目录中的 SQLite 文件，不会读写默认数据库。`PMGR_DB_PATH=:memory:` 也可用于单条命令，但每个 CLI 命令都是独立进程，命令结束后数据就会消失，不适合连续手工测试。
 
@@ -189,7 +191,7 @@ pnpm start import --file statuses.jsonl --json
 ```bash
 pnpm start export --format jsonl > project-statuses.jsonl
 
-PMGR_DB_PATH=./data/restored.sqlite \
+PMGR_DB_PATH=/tmp/project-mgr-restored.sqlite \
   pnpm start import project-statuses.jsonl
 ```
 

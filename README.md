@@ -23,7 +23,9 @@ npm install --global project-mgr
 pmgr current
 ```
 
-The database defaults to `./data/project-mgr.sqlite` in the current working directory. Set `PMGR_DB_PATH` to use another location:
+The database defaults to `~/.local/share/project-mgr/project-mgr.sqlite`, regardless of the directory where `pmgr` is executed. The CLI resolves this to an absolute path using the current user's home directory and creates the parent directory automatically.
+
+Set `PMGR_DB_PATH` to use another location:
 
 ```bash
 PMGR_DB_PATH=/absolute/path/projects.sqlite npx --yes project-mgr current
@@ -53,26 +55,26 @@ During development, run the TypeScript CLI directly:
 pnpm pmgr current
 ```
 
-The default configuration in `.env_sample` is:
+The default database path is:
 
-```dotenv
-PMGR_DB_PATH=./data/project-mgr.sqlite
+```text
+~/.local/share/project-mgr/project-mgr.sqlite
 ```
 
-Set `PMGR_DB_PATH` in `.env` to use another location, or override it for one command:
+`PMGR_DB_PATH` is optional in `.env_sample`. Set it in `.env` to use another location, or override it for one command:
 
 ```bash
 PMGR_DB_PATH=/absolute/path/projects.sqlite pnpm start current
 ```
 
-Relative paths are resolved from the working directory of the command. When `pnpm start ...` runs from this project's root, the default database is `./data/project-mgr.sqlite`. It is created automatically when the first valid command runs.
+Use a literal absolute path in `.env`; `.env` files do not expand `~` or `$HOME`. The database is created automatically when the first valid command runs.
 
 ### Use an isolated test database
 
 For manual testing, set a persistent path in `.env` that is separate from production data:
 
 ```dotenv
-PMGR_DB_PATH=./data/manual-test.sqlite
+PMGR_DB_PATH=/tmp/project-mgr-manual-test.sqlite
 ```
 
 Then run commands normally:
@@ -88,7 +90,7 @@ pnpm start history --project test-project
 
 Project keys must match exactly: a record added to `test-project` is not part of `project-mgr` history. Empty human-readable list queries print `No entries found.`; with `--json`, they print `[]`.
 
-`data/` is ignored by Git, so test data is not committed. Delete `data/manual-test.sqlite` when it is no longer needed.
+Delete `/tmp/project-mgr-manual-test.sqlite` when it is no longer needed.
 
 Automated tests use an in-memory database or SQLite files in the system temporary directory; they do not read or write the default database. `PMGR_DB_PATH=:memory:` also works for one command, but each CLI command runs in a separate process and its data disappears when the command exits, so it is not suitable for consecutive manual tests.
 
@@ -189,7 +191,7 @@ Exports omit the database-internal `id` and `recordedAt` fields and can be impor
 ```bash
 pnpm start export --format jsonl > project-statuses.jsonl
 
-PMGR_DB_PATH=./data/restored.sqlite \
+PMGR_DB_PATH=/tmp/project-mgr-restored.sqlite \
   pnpm start import project-statuses.jsonl
 ```
 

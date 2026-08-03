@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import {
   type Source,
@@ -46,7 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_status_entries_project_occurred ON status_entries
 export function databasePath(): string {
   return (
     process.env.PMGR_DB_PATH ||
-    resolve(process.cwd(), "data", "project-mgr.sqlite")
+    resolve(homedir(), ".local", "share", "project-mgr", "project-mgr.sqlite")
   );
 }
 
