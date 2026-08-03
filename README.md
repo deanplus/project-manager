@@ -45,7 +45,22 @@ The installer detects supported agents and asks where to install the skill. No s
 
 In Codex, write `$project-mgr` in the prompt. Alternatively, type `/pro` and select **project-mgr** from the picker. In other agents, use their explicit skill syntax or select `project-mgr` from the skills menu.
 
-For example: `Use $project-mgr to show this project's current status and recent history.`
+Use normal language after the skill name; the agent translates the request into CLI commands. For example:
+
+```text
+Use $project-mgr to show the current status and latest 10 updates for project-mgr.
+
+Use $project-mgr to record this update for project-mgr: active; released the Agent Skill;
+next, collect user feedback.
+
+Use $project-mgr to record these updates: api is blocked by authentication; web is active
+and the dashboard is complete.
+
+Use $project-mgr with PMGR_DB_PATH=/tmp/project-mgr-test.sqlite to add a test update,
+then show its history.
+```
+
+The agent should query before writing and ask for missing required values such as the project name, status, or summary.
 
 The skill uses the same `PMGR_DB_PATH` behavior as the CLI: it defaults to `~/.local/share/project-mgr/project-mgr.sqlite`; set an absolute path to work in another ledger. For manual or exploratory work, use a dedicated database such as `PMGR_DB_PATH=/tmp/project-mgr-skill-test.sqlite` rather than the default ledger.
 

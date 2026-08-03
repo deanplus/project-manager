@@ -45,7 +45,22 @@ npx skills add deanplus/project-manager
 
 在 Codex 的提示词中直接写 `$project-mgr`。也可以输入 `/pro`，然后在选择器中选择 **project-mgr**。其他 Agent 请使用其显式 Skill 语法，或从 Skills 菜单选择 `project-mgr`。
 
-例如：`使用 $project-mgr 查询当前项目状态和最近历史。`
+Skill 名称后直接使用自然语言即可，Agent 会把请求转换成 CLI 命令。例如：
+
+```text
+使用 $project-mgr 查询 project-mgr 的当前状态和最近 10 条更新。
+
+使用 $project-mgr 记录 project-mgr 的状态：active；已发布 Agent Skill；
+下一步收集用户反馈。
+
+使用 $project-mgr 批量记录状态：api 因认证问题 blocked；web 为 active，
+dashboard 已完成。
+
+使用 $project-mgr 和 PMGR_DB_PATH=/tmp/project-mgr-test.sqlite 添加一条测试状态，
+然后查询其历史。
+```
+
+Agent 应在写入前先查询；如果缺少项目名、状态或摘要等必填信息，它会向用户确认。
 
 该 Skill 与 CLI 使用相同的 `PMGR_DB_PATH` 规则：默认使用 `~/.local/share/project-mgr/project-mgr.sqlite`；如需使用其他账本，请设置绝对路径。手工或探索性操作请使用独立数据库，例如 `PMGR_DB_PATH=/tmp/project-mgr-skill-test.sqlite`，避免写入默认账本。
 
