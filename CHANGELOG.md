@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.4 - 2026-08-03
+
+### Changed
+
+- Renamed the Agent Skill from `project-mgr-status` to `project-mgr`.
+
 ## 0.1.3 - 2026-08-03
 
 ### Added

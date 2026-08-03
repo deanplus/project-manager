@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Manager"
+  short_description: "Manage local project status records safely"
+  default_prompt: "Use $project-mgr to add and inspect this project status."

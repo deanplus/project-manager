@@ -1,9 +1,9 @@
 ---
-name: project-mgr-status
+name: project-mgr
 description: Manage project status with the local-first project-mgr CLI. Use when an AI agent needs to add an append-only project update, import status records, query current or historical project state, or export a status ledger.
 ---
 
-# Project Mgr Status
+# Project Mgr
 
 Use `npx --yes --package project-mgr pmgr`. In a source checkout, use `pnpm pmgr` instead.
 

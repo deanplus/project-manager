@@ -1,4 +1,0 @@
-interface:
-  display_name: "Project Status Ledger"
-  short_description: "Manage local project status records safely"
-  default_prompt: "Use $project-mgr-status to add and inspect this project status."
