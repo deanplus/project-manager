@@ -6,7 +6,30 @@
 
 The first release provides only a local CLI and SQLite. It has no HTTP API, long-running service, or agent skills. Data stays on the local machine and requires no account or cloud service.
 
-## Install and run
+## Run from npm
+
+Requires Node.js 22+.
+
+Run without installing:
+
+```bash
+npx --yes project-mgr current
+```
+
+Or install the CLI globally:
+
+```bash
+npm install --global project-mgr
+pmgr current
+```
+
+The database defaults to `./data/project-mgr.sqlite` in the current working directory. Set `PMGR_DB_PATH` to use another location:
+
+```bash
+PMGR_DB_PATH=/absolute/path/projects.sqlite npx --yes project-mgr current
+```
+
+## Build from source
 
 Requires Node.js 22+ and pnpm 10.30.2.
 

@@ -6,7 +6,30 @@
 
 首版只提供本地 CLI 和 SQLite，不包含 HTTP API、常驻服务或 Agent Skills。数据默认保存在本机，无需账号或云服务。
 
-## 安装与运行
+## 从 npm 运行
+
+需要 Node.js 22+。
+
+无需安装即可运行：
+
+```bash
+npx --yes project-mgr current
+```
+
+也可以全局安装 CLI：
+
+```bash
+npm install --global project-mgr
+pmgr current
+```
+
+数据库默认位于当前工作目录下的 `./data/project-mgr.sqlite`。通过 `PMGR_DB_PATH` 指定其他位置：
+
+```bash
+PMGR_DB_PATH=/absolute/path/projects.sqlite npx --yes project-mgr current
+```
+
+## 从源码构建
 
 需要 Node.js 22+ 和 pnpm 10.30.2。
 

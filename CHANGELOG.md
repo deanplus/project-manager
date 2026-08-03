@@ -2,13 +2,19 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-08-03
+
+### Changed
+
+- Documented npm execution with `npx` and optional global installation.
+
+## 0.1.0 - 2026-08-03
+
 ### Fixed
 
 - Approved the required `better-sqlite3` and `esbuild` build scripts for reproducible frozen pnpm installs.
 - Made empty human-readable list queries explicit while preserving `[]` JSON output.
 - Added top-level CLI action shorthand while keeping `status <action>` compatibility.
-
-## 0.1.0 - 2026-08-03
 
 ### Added
 
