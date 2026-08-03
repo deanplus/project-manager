@@ -26,6 +26,7 @@ npx --yes --package project-mgr pmgr add --project my-project --status active --
 # Query current state, history, or state at a time.
 npx --yes --package project-mgr pmgr current --project my-project --json
 npx --yes --package project-mgr pmgr history --project my-project --limit 20 --json
+npx --yes --package project-mgr pmgr history --limit 20 --json
 npx --yes --package project-mgr pmgr at --project my-project --at 2026-08-03T12:00:00+08:00 --json
 
 # Import validated JSON/JSONL, or export portable records.

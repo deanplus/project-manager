@@ -157,6 +157,9 @@ pnpm start history \
   --limit 20 \
   --offset 0
 
+# 查询全部项目的近期历史。
+pnpm start history --limit 20 --json
+
 pnpm start at \
   --project project-mgr \
   --at 2026-08-03T12:00:00+08:00 \
@@ -210,12 +213,12 @@ pnpm start import --file statuses.jsonl --json
 
 ## 查询与导出
 
-| 命令      | 用途                       | 主要选项                                                           |
-| --------- | -------------------------- | ------------------------------------------------------------------ |
-| `current` | 所有项目或单项目的当前状态 | `--project`、`--json`                                              |
-| `history` | 单项目历史，最新记录在前   | `--project`、`--since`、`--until`、`--limit`、`--offset`、`--json` |
-| `at`      | 指定时间点及之前的最后状态 | `--project`、`--at`、`--json`                                      |
-| `export`  | 导出全部或单项目记录       | `--project`、`--format json\|jsonl`                                |
+| 命令      | 用途                               | 主要选项                                                           |
+| --------- | ---------------------------------- | ------------------------------------------------------------------ |
+| `current` | 所有项目或单项目的当前状态         | `--project`、`--json`                                              |
+| `history` | 全部或单个项目的历史，最新记录在前 | `--project`、`--since`、`--until`、`--limit`、`--offset`、`--json` |
+| `at`      | 指定时间点及之前的最后状态         | `--project`、`--at`、`--json`                                      |
+| `export`  | 导出全部或单项目记录               | `--project`、`--format json\|jsonl`                                |
 
 全部六个 action 仍可使用 `status <action>` 的兼容形式，例如 `pmgr status export`。人类可读的多条结果按“项目、状态、发生时间、摘要”输出；为空时输出 `No entries found.`。`add`、`import`、`current`、`history`、`at` 支持 `--json`；`export` 由 `--format` 控制格式。
 

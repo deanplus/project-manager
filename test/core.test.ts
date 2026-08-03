@@ -314,6 +314,12 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
     execute(["status", "history", "--project", "cli", "--json"]),
     /added/,
   );
+  assert.deepEqual(
+    JSON.parse(execute(["history", "--limit", "2", "--json"])).map(
+      (item: { project: string }) => item.project,
+    ),
+    ["human", "cli"],
+  );
   assert.equal(
     JSON.parse(
       execute([
@@ -366,7 +372,6 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
     () => execute(["status", "history", "--project", "cli", "--limit", "1.5"]),
     ValidationError,
   );
-  assert.throws(() => execute(["status", "history"]), ValidationError);
   assert.throws(() => execute(["status", "add", "--project"]), ValidationError);
   assert.throws(
     () =>

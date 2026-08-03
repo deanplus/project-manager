@@ -210,7 +210,7 @@ export function run(
         break;
       case "history":
         output(
-          history(db, stringFlag(flags, "project", true), {
+          history(db, stringFlag(flags, "project"), {
             since:
               stringFlag(flags, "since") &&
               parseTime(stringFlag(flags, "since"), "since"),

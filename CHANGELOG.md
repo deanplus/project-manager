@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 - 2026-08-03
+
+### Fixed
+
+- Allowed `history` to query recent entries across all projects without `--project`.
 
 ## 0.1.5 - 2026-08-03
 

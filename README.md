@@ -157,6 +157,9 @@ pnpm start history \
   --limit 20 \
   --offset 0
 
+# Recent history across every project.
+pnpm start history --limit 20 --json
+
 pnpm start at \
   --project project-mgr \
   --at 2026-08-03T12:00:00+08:00 \
@@ -210,12 +213,12 @@ Unknown fields, unknown CLI options, extra positional arguments, invalid statuse
 
 ## Query and export
 
-| Command   | Purpose                                         | Key options                                                        |
-| --------- | ----------------------------------------------- | ------------------------------------------------------------------ |
-| `current` | Current status for all projects or one project  | `--project`, `--json`                                              |
-| `history` | One project's history, newest first             | `--project`, `--since`, `--until`, `--limit`, `--offset`, `--json` |
-| `at`      | The latest status at or before a specified time | `--project`, `--at`, `--json`                                      |
-| `export`  | Export all records or one project's records     | `--project`, `--format json\|jsonl`                                |
+| Command   | Purpose                                               | Key options                                                        |
+| --------- | ----------------------------------------------------- | ------------------------------------------------------------------ |
+| `current` | Current status for all projects or one project        | `--project`, `--json`                                              |
+| `history` | History for all projects or one project, newest first | `--project`, `--since`, `--until`, `--limit`, `--offset`, `--json` |
+| `at`      | The latest status at or before a specified time       | `--project`, `--at`, `--json`                                      |
+| `export`  | Export all records or one project's records           | `--project`, `--format json\|jsonl`                                |
 
 All six actions can also use the compatible `status <action>` form, for example `pmgr status export`. Human-readable multi-record results list project, status, occurrence time, and summary, or `No entries found.` when empty. `add`, `import`, `current`, `history`, and `at` support `--json`; `export` uses `--format` to select its format.
 
