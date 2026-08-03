@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.5 - 2026-08-03
+
+### Changed
+
+- Matched the Skill picker label to the project name, `project-mgr`, and documented explicit invocation.
+
 ## 0.1.4 - 2026-08-03
 
 ### Changed

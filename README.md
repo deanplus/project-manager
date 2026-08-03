@@ -33,7 +33,7 @@ PMGR_DB_PATH=/absolute/path/projects.sqlite npx --yes --package project-mgr pmgr
 
 ## Install the Agent Skill
 
-The repository includes `skills/project-mgr`, which guides compatible AI agents to add, import, query, and export status records. Install it with the [skills CLI](https://skills.sh/docs/cli):
+The repository includes the `project-mgr` skill, shown as **project-mgr** in skill pickers. It guides compatible AI agents to add, import, query, and export local project status history. Install it with the [skills CLI](https://skills.sh/docs/cli):
 
 ```bash
 npx skills add deanplus/project-manager
@@ -41,9 +41,13 @@ npx skills add deanplus/project-manager
 
 The installer detects supported agents and asks where to install the skill. No separate `project-mgr` installation is required: the skill runs the CLI through `npx`. Restart or reload the selected agent after installation.
 
-The skill uses the same `PMGR_DB_PATH` behavior as the CLI: it defaults to `~/.local/share/project-mgr/project-mgr.sqlite`; set an absolute path to work in another ledger. For manual or exploratory work, use a dedicated database such as `PMGR_DB_PATH=/tmp/project-mgr-skill-test.sqlite` rather than the default ledger.
+### Invoke the skill
 
-Then ask the agent, for example: `Use project-mgr to add an active status after checking its current status.`
+In Codex, write `$project-mgr` in the prompt. Alternatively, type `/pro` and select **project-mgr** from the picker. In other agents, use their explicit skill syntax or select `project-mgr` from the skills menu.
+
+For example: `Use $project-mgr to show this project's current status and recent history.`
+
+The skill uses the same `PMGR_DB_PATH` behavior as the CLI: it defaults to `~/.local/share/project-mgr/project-mgr.sqlite`; set an absolute path to work in another ledger. For manual or exploratory work, use a dedicated database such as `PMGR_DB_PATH=/tmp/project-mgr-skill-test.sqlite` rather than the default ledger.
 
 ## Build from source
 

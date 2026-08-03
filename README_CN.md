@@ -33,7 +33,7 @@ PMGR_DB_PATH=/absolute/path/projects.sqlite npx --yes --package project-mgr pmgr
 
 ## 安装 Agent Skill
 
-仓库包含 `skills/project-mgr`，用于指导兼容 Skills 的 AI Agent 新增、导入、查询和导出项目状态记录。通过 [skills CLI](https://skills.sh/docs/cli) 安装：
+仓库包含 `project-mgr` Skill，在 Skill 选择器中显示为 **project-mgr**。它用于指导兼容 Skills 的 AI Agent 新增、导入、查询和导出本地项目状态历史。通过 [skills CLI](https://skills.sh/docs/cli) 安装：
 
 ```bash
 npx skills add deanplus/project-manager
@@ -41,9 +41,13 @@ npx skills add deanplus/project-manager
 
 安装器会检测支持的 Agent，并询问安装目标。无需单独安装 `project-mgr`：该 Skill 会通过 `npx` 运行 CLI。安装后重启或重新加载所选 Agent。
 
-该 Skill 与 CLI 使用相同的 `PMGR_DB_PATH` 规则：默认使用 `~/.local/share/project-mgr/project-mgr.sqlite`；如需使用其他账本，请设置绝对路径。手工或探索性操作请使用独立数据库，例如 `PMGR_DB_PATH=/tmp/project-mgr-skill-test.sqlite`，避免写入默认账本。
+### 调用 Skill
 
-随后可向 Agent 提出，例如：`使用 project-mgr，在查询当前状态后新增一条 active 状态。`
+在 Codex 的提示词中直接写 `$project-mgr`。也可以输入 `/pro`，然后在选择器中选择 **project-mgr**。其他 Agent 请使用其显式 Skill 语法，或从 Skills 菜单选择 `project-mgr`。
+
+例如：`使用 $project-mgr 查询当前项目状态和最近历史。`
+
+该 Skill 与 CLI 使用相同的 `PMGR_DB_PATH` 规则：默认使用 `~/.local/share/project-mgr/project-mgr.sqlite`；如需使用其他账本，请设置绝对路径。手工或探索性操作请使用独立数据库，例如 `PMGR_DB_PATH=/tmp/project-mgr-skill-test.sqlite`，避免写入默认账本。
 
 ## 从源码构建
 
