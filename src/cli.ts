@@ -1,0 +1,261 @@
+#!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import {
+  addStatus,
+  at,
+  current,
+  history,
+  importStatuses,
+  openLedger,
+  parseTime,
+  toPortableStatusEntry,
+  ValidationError,
+} from "./index.js";
+
+type Flags = Record<string, string | string[] | boolean>;
+const repeats = new Set(["next", "blocker", "decision", "tag"]);
+
+function parse(argv: string[]): { command: string[]; flags: Flags } {
+  const command: string[] = [];
+  const flags: Flags = Object.create(null) as Flags;
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (!token.startsWith("--")) {
+      command.push(token);
+      continue;
+    }
+    const key = token.slice(2);
+    if (key === "json") {
+      if (flags[key] !== undefined)
+        throw new ValidationError(`--${key} may only be supplied once`);
+      flags[key] = true;
+      continue;
+    }
+    const value = argv[++index];
+    if (!value || value.startsWith("--"))
+      throw new ValidationError(`--${key} requires a value`);
+    if (repeats.has(key))
+      flags[key] = [...((flags[key] as string[] | undefined) ?? []), value];
+    else if (flags[key] !== undefined)
+      throw new ValidationError(`--${key} may only be supplied once`);
+    else flags[key] = value;
+  }
+  return { command, flags };
+}
+
+const allowedFlags = new Map<string, ReadonlySet<string>>([
+  [
+    "add",
+    new Set([
+      "project",
+      "status",
+      "summary",
+      "progress",
+      "blocker",
+      "next",
+      "decision",
+      "tag",
+      "at",
+      "source",
+      "external-ref",
+      "json",
+    ]),
+  ],
+  ["import", new Set(["file", "json"])],
+  ["current", new Set(["project", "json"])],
+  [
+    "history",
+    new Set(["project", "since", "until", "limit", "offset", "json"]),
+  ],
+  ["at", new Set(["project", "at", "json"])],
+  ["export", new Set(["project", "format"])],
+]);
+
+function validateInvocation(command: string[], flags: Flags): void {
+  const action = command[1] ?? "";
+  const allowed = allowedFlags.get(action);
+  if (command[0] !== "status" || !allowed)
+    throw new ValidationError(
+      "usage: pmgr status <add|import|current|history|at|export>",
+    );
+  const positional = command.slice(2);
+  if (action === "import") {
+    if (positional.length > 1)
+      throw new ValidationError("import accepts at most one file argument");
+    if (positional.length === 1 && flags.file !== undefined)
+      throw new ValidationError(
+        "import file must be positional or --file, not both",
+      );
+  } else if (positional.length) {
+    throw new ValidationError(`${action} does not accept positional arguments`);
+  }
+  for (const key of Object.keys(flags))
+    if (!allowed.has(key))
+      throw new ValidationError(`unknown flag for ${action}: --${key}`);
+}
+
+function stringFlag(
+  flags: Flags,
+  name: string,
+  required = false,
+): string | undefined {
+  const value = flags[name];
+  if (required && typeof value !== "string")
+    throw new ValidationError(`--${name} is required`);
+  return typeof value === "string" ? value : undefined;
+}
+
+function listFlag(flags: Flags, name: string): string[] {
+  return (flags[name] as string[] | undefined) ?? [];
+}
+function numberFlag(flags: Flags, name: string, fallback: number): number {
+  const value = stringFlag(flags, name);
+  if (!value) return fallback;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0)
+    throw new ValidationError(`--${name} must be a non-negative integer`);
+  return number;
+}
+
+function output(
+  value: unknown,
+  json: boolean,
+  write: (text: string) => void,
+): void {
+  if (json) write(`${JSON.stringify(value)}\n`);
+  else if (Array.isArray(value))
+    write(
+      `${value.map((entry) => `${entry.project}\t${entry.status}\t${entry.occurredAt}\t${entry.summary}`).join("\n")}\n`,
+    );
+  else write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function imported(file: string): unknown[] {
+  if (!file) throw new ValidationError("import file is required");
+  const content = readFileSync(file, "utf8").trim();
+  if (!content) throw new ValidationError(`${basename(file)} is empty`);
+  if (file.endsWith(".jsonl"))
+    return content.split(/\r?\n/).map((line, index) => {
+      try {
+        return JSON.parse(line) as unknown;
+      } catch {
+        throw new ValidationError(
+          `${basename(file)} line ${index + 1} is not JSON`,
+        );
+      }
+    });
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content) as unknown;
+  } catch {
+    throw new ValidationError(`${basename(file)} is not JSON`);
+  }
+  return Array.isArray(parsed) ? parsed : [parsed];
+}
+
+export function run(
+  argv: string[],
+  write = process.stdout.write.bind(process.stdout),
+): void {
+  const { command, flags } = parse(argv);
+  validateInvocation(command, flags);
+  const db = openLedger();
+  const json = flags.json === true;
+  try {
+    switch (command[1]) {
+      case "add":
+        output(
+          addStatus(db, {
+            project: stringFlag(flags, "project", true),
+            status: stringFlag(flags, "status", true),
+            summary: stringFlag(flags, "summary", true),
+            progress: stringFlag(flags, "progress"),
+            blockers: listFlag(flags, "blocker"),
+            nextSteps: listFlag(flags, "next"),
+            decisions: listFlag(flags, "decision"),
+            tags: listFlag(flags, "tag"),
+            occurredAt: stringFlag(flags, "at"),
+            source: stringFlag(flags, "source"),
+            externalRef: stringFlag(flags, "external-ref"),
+          }).entry,
+          json,
+          write,
+        );
+        break;
+      case "import":
+        output(
+          importStatuses(
+            db,
+            imported(stringFlag(flags, "file") ?? command[2] ?? ""),
+          ).map((result) => result.entry),
+          json,
+          write,
+        );
+        break;
+      case "current":
+        output(current(db, stringFlag(flags, "project")), json, write);
+        break;
+      case "history":
+        output(
+          history(db, stringFlag(flags, "project", true), {
+            since:
+              stringFlag(flags, "since") &&
+              parseTime(stringFlag(flags, "since"), "since"),
+            until:
+              stringFlag(flags, "until") &&
+              parseTime(stringFlag(flags, "until"), "until"),
+            limit: numberFlag(flags, "limit", 100),
+            offset: numberFlag(flags, "offset", 0),
+          }),
+          json,
+          write,
+        );
+        break;
+      case "at":
+        output(
+          at(
+            db,
+            stringFlag(flags, "project", true) as string,
+            parseTime(stringFlag(flags, "at", true), "at"),
+          ) ?? null,
+          json,
+          write,
+        );
+        break;
+      case "export": {
+        const entries = history(db, stringFlag(flags, "project"), {
+          limit: -1,
+        })
+          .reverse()
+          .map(toPortableStatusEntry);
+        const format = stringFlag(flags, "format") ?? "json";
+        if (format === "jsonl")
+          write(
+            entries.map((entry) => JSON.stringify(entry)).join("\n") +
+              (entries.length ? "\n" : ""),
+          );
+        else if (format === "json") output(entries, true, write);
+        else throw new ValidationError("--format must be json or jsonl");
+        break;
+      }
+    }
+  } finally {
+    db.close();
+  }
+}
+
+/* c8 ignore start -- process entry glue is covered by the CLI integration tests through run(). */
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+) {
+  try {
+    run(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
+/* c8 ignore stop */
