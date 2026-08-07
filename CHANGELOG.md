@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.7 - 2026-08-07
+
+### Added
+
+- Added project metadata management (`displayName`, `description`, `notes`) and fuzzy search via `projects` / `list --query`.
+- Added explicit field clearing for project metadata via `--clear-description` and `--clear-notes` flags in `pmgr set-project`.
+
 ## 0.1.6 - 2026-08-03
 
 ### Fixed

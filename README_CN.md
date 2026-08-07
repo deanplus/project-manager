@@ -176,12 +176,37 @@ pnpm start at \
 
 可选参数：
 
+- `--description`：项目简介/描述（更新项目元数据）。
+- `--notes`：项目备注（更新项目元数据）。
 - `--progress`：已经完成的工作。
 - `--blocker`、`--next`、`--decision`、`--tag`：可以重复传入。
 - `--at`：状态实际发生时间，必须是带时区的 ISO 8601 时间；缺省为当前时间。
 - `--source`：`human`、`agent` 或 `import`；缺省为 `human`。
 - `--external-ref`：全局幂等键。重复写入同一项目时返回原记录；若被其他项目占用则报错。
 - `--json`：输出稳定 JSON。
+
+## 项目元数据与模糊查询
+
+可通过 `set-project` 设置或更新项目的名称、简介与备注，或使用 `--clear-description` / `--clear-notes` 清空：
+
+```bash
+pnpm start set-project \
+  --project project-mgr \
+  --display-name "Project Manager" \
+  --description "本地优先、只追加的项目状态账本" \
+  --notes "核心 CLI 与 Agent Skill 已上线"
+
+# 清空简介或备注
+pnpm start set-project --project project-mgr --clear-description --clear-notes
+```
+
+可通过 `projects`（或 `list`）列出所有项目或使用 `--query` 进行模糊匹配搜索（匹配项目名称 slug、显示名称、简介、备注、最新状态摘要及标签）：
+
+```bash
+pnpm start projects
+pnpm start list --query "账本"
+pnpm start projects --query "mvp" --json
+```
 
 ## 批量导入
 
@@ -213,14 +238,16 @@ pnpm start import --file statuses.jsonl --json
 
 ## 查询与导出
 
-| 命令      | 用途                               | 主要选项                                                           |
-| --------- | ---------------------------------- | ------------------------------------------------------------------ |
-| `current` | 所有项目或单项目的当前状态         | `--project`、`--json`                                              |
-| `history` | 全部或单个项目的历史，最新记录在前 | `--project`、`--since`、`--until`、`--limit`、`--offset`、`--json` |
-| `at`      | 指定时间点及之前的最后状态         | `--project`、`--at`、`--json`                                      |
-| `export`  | 导出全部或单项目记录               | `--project`、`--format json\|jsonl`                                |
+| 命令          | 用途                                     | 主要选项                                                                                                    |
+| ------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `projects`    | 列出所有项目或按关键词模糊匹配搜索项目   | `--query`、`--json`                                                                                         |
+| `set-project` | 设置/更新/清空项目的显示名称、简介与备注 | `--project`、`--display-name`、`--description`、`--notes`、`--clear-description`、`--clear-notes`、`--json` |
+| `current`     | 所有项目或单项目的当前状态               | `--project`、`--json`                                                                                       |
+| `history`     | 全部或单个项目的历史，最新记录在前       | `--project`、`--since`、`--until`、`--limit`、`--offset`、`--json`                                          |
+| `at`          | 指定时间点及之前的最后状态               | `--project`、`--at`、`--json`                                                                               |
+| `export`      | 导出全部或单项目记录                     | `--project`、`--format json\|jsonl`                                                                         |
 
-全部六个 action 仍可使用 `status <action>` 的兼容形式，例如 `pmgr status export`。人类可读的多条结果按“项目、状态、发生时间、摘要”输出；为空时输出 `No entries found.`。`add`、`import`、`current`、`history`、`at` 支持 `--json`；`export` 由 `--format` 控制格式。
+全部 action 仍可使用 `status <action>` 的兼容形式，例如 `pmgr status projects`。人类可读的多条结果按项目及其最新状态输出；为空时输出 `No entries found.` 或 `No projects found.`。`add`、`import`、`current`、`projects`、`list`、`set-project`、`history`、`at` 支持 `--json`；`export` 由 `--format` 控制格式。
 
 导出内容不包含数据库内部的 `id` 和 `recordedAt`，可以直接重新导入。记录按时间从旧到新导出，从而在恢复时保留相同时间戳记录的先后关系：
 

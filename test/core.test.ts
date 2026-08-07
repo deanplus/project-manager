@@ -13,9 +13,12 @@ import {
   databasePath,
   history,
   importStatuses,
+  listProjects,
   openLedger,
   parseTime,
+  setProjectMetadata,
   toPortableStatusEntry,
+  validateProjectMetadataInput,
   validateStatusEntry,
   ValidationError,
 } from "../src/index.js";
@@ -55,6 +58,14 @@ test("domain normalizes valid values and rejects invalid input", () => {
       externalRef: "ref",
     },
   );
+  assert.ok(
+    validateStatusEntry({
+      project: "default-time",
+      status: "active",
+      summary: "sum",
+    }).occurredAt,
+  );
+
   for (const invalid of [
     null,
     [],
@@ -79,12 +90,59 @@ test("domain normalizes valid values and rejects invalid input", () => {
   });
   assert.equal("id" in portable, false);
   assert.equal("recordedAt" in portable, false);
+
+  assert.deepEqual(
+    validateProjectMetadataInput({
+      project: " demo ",
+      displayName: " Demo Project ",
+      description: " Desc ",
+      notes: " Notes ",
+    }),
+    {
+      project: "demo",
+      displayName: "Demo Project",
+      description: "Desc",
+      notes: "Notes",
+    },
+  );
+
+  assert.deepEqual(
+    validateProjectMetadataInput({
+      project: "demo",
+      description: null,
+      notes: "",
+    }),
+    {
+      project: "demo",
+      description: null,
+      notes: null,
+    },
+  );
+
+  for (const invalid of [
+    null,
+    [],
+    { unknownKey: true },
+    { project: "bad space" },
+    { project: "demo", description: 123 },
+    { project: "demo", notes: "x".repeat(2_001) },
+  ]) {
+    assert.throws(() => validateProjectMetadataInput(invalid), ValidationError);
+  }
 });
 
 test("SQLite ledger migrates, appends, is idempotent, and queries by timeline", () => {
   const db = openLedger(":memory:");
-  const first = addStatus(db, entry({ externalRef: "one", progress: "done" }));
+  const first = addStatus(
+    db,
+    entry({
+      externalRef: "one",
+      progress: "done",
+    }),
+  );
   assert.equal(first.inserted, true);
+  assert.equal(first.entry.progress, "done");
+
   assert.equal(
     addStatus(db, entry({ summary: "ignored", externalRef: "one" })).inserted,
     false,
@@ -137,8 +195,64 @@ test("SQLite ledger migrates, appends, is idempotent, and queries by timeline", 
         count: number;
       }
     ).count,
-    1,
+    2,
   );
+
+  // Test setProjectMetadata & listProjects
+  const meta = setProjectMetadata(db, {
+    project: "project-mgr",
+    displayName: "Project Manager",
+    description: "Updated Description",
+    notes: "Updated Notes",
+  });
+  assert.equal(meta.displayName, "Project Manager");
+  assert.equal(meta.description, "Updated Description");
+  assert.equal(meta.notes, "Updated Notes");
+
+  // Create project with notes only (no description)
+
+  const notesOnlyMeta = setProjectMetadata(db, {
+    project: "notes-only-meta",
+    notes: "Only Note",
+  });
+  assert.equal(notesOnlyMeta.description, undefined);
+  assert.equal(notesOnlyMeta.notes, "Only Note");
+
+  // Create project without status entries
+  setProjectMetadata(db, {
+    project: "standalone",
+    description: "Standalone App",
+  });
+
+  // Create project with tag for search
+  addStatus(db, entry({ project: "tag-proj", tags: ["my-special-tag"] }));
+  const matchedTag = listProjects(db, { query: "my-special-tag" });
+  assert.equal(matchedTag.length, 1);
+  assert.equal(matchedTag[0].project, "tag-proj");
+
+  const allProjects = listProjects(db);
+  assert.equal(allProjects.length, 5);
+
+  const matchedNotes = listProjects(db, { query: "Updated Notes" });
+  assert.equal(matchedNotes.length, 1);
+  assert.equal(matchedNotes[0].project, "project-mgr");
+
+  const matchedStandalone = listProjects(db, { query: "Standalone App" });
+  assert.equal(matchedStandalone.length, 1);
+  assert.equal(matchedStandalone[0].project, "standalone");
+
+  const matchedNone = listProjects(db, { query: "nonexistent" });
+  assert.equal(matchedNone.length, 0);
+
+  // Test clearing description and notes with null or empty string
+  const clearedMeta = setProjectMetadata(db, {
+    project: "project-mgr",
+    description: null,
+    notes: "",
+  });
+  assert.equal(clearedMeta.description, undefined);
+  assert.equal(clearedMeta.notes, undefined);
+
   db.close();
 });
 
@@ -209,7 +323,7 @@ test("CLI runs through a package-style symlink", () => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-test("CLI supports add, import, reads, errors, and export formats", () => {
+test("CLI supports add, import, reads, errors, project metadata, and export formats", () => {
   const directory = mkdtempSync(join(tmpdir(), "pmgr-cli-"));
   const file = join(directory, "ledger.sqlite");
   const importFile = join(directory, "entries.jsonl");
@@ -253,6 +367,10 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
       "active",
       "--summary",
       "added",
+      "--description",
+      "CLI project description",
+      "--notes",
+      "CLI project notes",
       "--progress",
       "covered",
       "--next",
@@ -263,10 +381,118 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
       "cli",
       "--external-ref",
       "cli-add",
+      "--at",
+      timestamp,
       "--json",
     ]),
   );
   assert.equal(added.project, "cli");
+
+  // CLI set-project, projects, and list commands
+  assert.match(
+    execute([
+      "set-project",
+      "--project",
+      "custom-proj",
+      "--display-name",
+      "Custom Proj",
+      "--description",
+      "Custom description",
+      "--notes",
+      "Custom note",
+      "--json",
+    ]),
+    /Custom Proj/,
+  );
+
+  // Test set-project updates existing project with partial fields
+  assert.match(
+    execute([
+      "set-project",
+      "--project",
+      "custom-proj",
+      "--display-name",
+      "Custom Proj Renamed",
+    ]),
+    /Custom Proj Renamed/,
+  );
+  execute([
+    "set-project",
+    "--project",
+    "custom-proj",
+    "--description",
+    "Updated desc only",
+  ]);
+  execute([
+    "set-project",
+    "--project",
+    "custom-proj",
+    "--notes",
+    "Updated note only",
+  ]);
+  execute(["set-project", "--project", "custom-proj"]);
+
+  // Test list / projects fuzzy search across all branches and human formatting
+  assert.match(execute(["projects"]), /cli\tcli/);
+  assert.match(execute(["projects"]), /Description: CLI project description/);
+  assert.match(execute(["projects"]), /Notes: CLI project notes/);
+  assert.match(execute(["projects"]), /Latest Status: \(none\)/);
+
+  assert.match(
+    execute(["list", "--query", "Custom Proj Renamed"]),
+    /Custom Proj Renamed/,
+  );
+  assert.match(
+    execute(["list", "--query", "Updated desc only"]),
+    /Updated desc only/,
+  );
+  assert.match(
+    execute(["list", "--query", "Updated note only"]),
+    /Updated note only/,
+  );
+  assert.match(execute(["projects", "--query", "active"]), /cli/);
+  assert.match(execute(["projects", "--query", "added"]), /cli/);
+  assert.match(execute(["projects", "--query", "covered"]), /cli/);
+  assert.match(execute(["projects", "--query", "cli"]), /cli/);
+  assert.equal(
+    execute(["projects", "--query", "no-match"]),
+    "No projects found.\n",
+  );
+  assert.equal(execute(["projects", "--query", "no-match", "--json"]), "[]\n");
+
+  // Test clearing description and notes via CLI flags
+  assert.throws(
+    () =>
+      execute([
+        "set-project",
+        "--project",
+        "custom-proj",
+        "--description",
+        "desc",
+        "--clear-description",
+      ]),
+    /cannot specify both --description and --clear-description/,
+  );
+  assert.throws(
+    () =>
+      execute([
+        "set-project",
+        "--project",
+        "custom-proj",
+        "--notes",
+        "note",
+        "--clear-notes",
+      ]),
+    /cannot specify both --notes and --clear-notes/,
+  );
+  execute([
+    "set-project",
+    "--project",
+    "custom-proj",
+    "--clear-description",
+    "--clear-notes",
+  ]);
+
   assert.match(
     execute([
       "status",
@@ -277,6 +503,8 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
       "active",
       "--summary",
       "human output",
+      "--at",
+      timestamp,
     ]),
     /human output/,
   );
@@ -318,8 +546,9 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
     JSON.parse(execute(["history", "--limit", "2", "--json"])).map(
       (item: { project: string }) => item.project,
     ),
-    ["human", "cli"],
+    ["array", "json"],
   );
+
   assert.equal(
     JSON.parse(
       execute([
@@ -372,7 +601,9 @@ test("CLI supports add, import, reads, errors, and export formats", () => {
     () => execute(["status", "history", "--project", "cli", "--limit", "1.5"]),
     ValidationError,
   );
+  assert.throws(() => execute(["set-project"]), ValidationError);
   assert.throws(() => execute(["status", "add", "--project"]), ValidationError);
+
   assert.throws(
     () =>
       execute(["status", "current", "--project", "cli", "--project", "again"]),

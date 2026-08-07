@@ -176,12 +176,37 @@ pnpm start at \
 
 Optional arguments:
 
+- `--description`: Project introduction or description (updates project metadata).
+- `--notes`: Project notes/remarks (updates project metadata).
 - `--progress`: Work already completed.
 - `--blocker`, `--next`, `--decision`, and `--tag`: May be specified repeatedly.
 - `--at`: When the status actually occurred. It must be an ISO 8601 timestamp with a timezone; defaults to the current time.
 - `--source`: `human`, `agent`, or `import`; defaults to `human`.
 - `--external-ref`: A globally idempotent key. A duplicate write to the same project returns the existing record; use by another project is an error.
 - `--json`: Emit stable JSON.
+
+### Project Metadata & Fuzzy Search
+
+Set or update a project's display name, description, and notes with `set-project`, or clear metadata using `--clear-description` / `--clear-notes`:
+
+```bash
+pnpm start set-project \
+  --project project-mgr \
+  --display-name "Project Manager" \
+  --description "Local-first append-only project status ledger" \
+  --notes "Core CLI and Agent Skill are published"
+
+# Clear description or notes
+pnpm start set-project --project project-mgr --clear-description --clear-notes
+```
+
+List projects or search projects using fuzzy matching across slug, display name, description, notes, latest status summary, and tags with `projects` (or `list`):
+
+```bash
+pnpm start projects
+pnpm start list --query "ledger"
+pnpm start projects --query "mvp" --json
+```
 
 ## Bulk import
 
@@ -213,14 +238,16 @@ Unknown fields, unknown CLI options, extra positional arguments, invalid statuse
 
 ## Query and export
 
-| Command   | Purpose                                               | Key options                                                        |
-| --------- | ----------------------------------------------------- | ------------------------------------------------------------------ |
-| `current` | Current status for all projects or one project        | `--project`, `--json`                                              |
-| `history` | History for all projects or one project, newest first | `--project`, `--since`, `--until`, `--limit`, `--offset`, `--json` |
-| `at`      | The latest status at or before a specified time       | `--project`, `--at`, `--json`                                      |
-| `export`  | Export all records or one project's records           | `--project`, `--format json\|jsonl`                                |
+| Command       | Purpose                                               | Key options                                                                                                 |
+| ------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `projects`    | List all projects or fuzzy search by query            | `--query`, `--json`                                                                                         |
+| `set-project` | Set/update project display name, description, & notes | `--project`, `--display-name`, `--description`, `--notes`, `--clear-description`, `--clear-notes`, `--json` |
+| `current`     | Current status for all projects or one project        | `--project`, `--json`                                                                                       |
+| `history`     | History for all projects or one project, newest first | `--project`, `--since`, `--until`, `--limit`, `--offset`, `--json`                                          |
+| `at`          | The latest status at or before a specified time       | `--project`, `--at`, `--json`                                                                               |
+| `export`      | Export all records or one project's records           | `--project`, `--format json\|jsonl`                                                                         |
 
-All six actions can also use the compatible `status <action>` form, for example `pmgr status export`. Human-readable multi-record results list project, status, occurrence time, and summary, or `No entries found.` when empty. `add`, `import`, `current`, `history`, and `at` support `--json`; `export` uses `--format` to select its format.
+All actions can also use the compatible `status <action>` form, for example `pmgr status projects`. Human-readable multi-record results list projects and their latest status, or `No entries found.` / `No projects found.` when empty. `add`, `import`, `current`, `projects`, `list`, `set-project`, `history`, and `at` support `--json`; `export` uses `--format` to select its format.
 
 Exports omit the database-internal `id` and `recordedAt` fields and can be imported directly. Records are exported from oldest to newest so that restoring them preserves the insertion order of records with the same timestamp:
 

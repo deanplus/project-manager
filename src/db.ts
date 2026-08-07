@@ -3,9 +3,12 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import {
+  type ProjectMetadata,
+  type ProjectOverview,
   type Source,
   type StatusEntry,
   type StatusEntryInput,
+  validateProjectMetadataInput,
   validateStatusEntry,
   ValidationError,
 } from "./domain.js";
@@ -19,7 +22,7 @@ export type HistoryOptions = {
   offset?: number;
 };
 
-const migration = `
+const migration1 = `
 CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
@@ -44,6 +47,11 @@ CREATE TABLE IF NOT EXISTS status_entries (
 CREATE INDEX IF NOT EXISTS idx_status_entries_project_occurred ON status_entries(project_id, occurred_at DESC, id DESC);
 `;
 
+const migration2 = `
+ALTER TABLE projects ADD COLUMN description TEXT;
+ALTER TABLE projects ADD COLUMN notes TEXT;
+`;
+
 export function databasePath(): string {
   return (
     process.env.PMGR_DB_PATH ||
@@ -62,8 +70,14 @@ export function openLedger(path = databasePath()): Ledger {
     if (
       !db.prepare("SELECT 1 FROM schema_migrations WHERE version = 1").get()
     ) {
-      db.exec(migration);
+      db.exec(migration1);
       db.prepare("INSERT INTO schema_migrations(version) VALUES (1)").run();
+    }
+    if (
+      !db.prepare("SELECT 1 FROM schema_migrations WHERE version = 2").get()
+    ) {
+      db.exec(migration2);
+      db.prepare("INSERT INTO schema_migrations(version) VALUES (2)").run();
     }
   }).immediate();
   return db;
@@ -82,7 +96,7 @@ function entryFromRow(row: Record<string, unknown>): StatusEntry {
     tags: JSON.parse(row.tags_json as string) as string[],
     occurredAt: row.occurred_at as string,
     recordedAt: row.recorded_at as string,
-    source: row.source as StatusEntry["source"],
+    source: row.source as Source,
     ...(row.external_ref ? { externalRef: row.external_ref as string } : {}),
   };
 }
@@ -96,6 +110,124 @@ function one(
   const row = db.prepare(sql).get(...params) as
     Record<string, unknown> | undefined;
   return row && entryFromRow(row);
+}
+
+function upsertProjectMetadata(
+  db: Ledger,
+  input: {
+    project: string;
+    displayName?: string;
+    description?: string | null;
+    notes?: string | null;
+  },
+): void {
+  const existing = db
+    .prepare("SELECT 1 FROM projects WHERE slug = ?")
+    .get(input.project);
+  if (!existing) {
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO projects(slug, display_name, description, notes, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(
+      input.project,
+      input.displayName ?? input.project,
+      input.description ?? null,
+      input.notes ?? null,
+      now,
+    );
+  } else {
+    const updates: string[] = [];
+    const params: unknown[] = [];
+    if (input.displayName !== undefined) {
+      updates.push("display_name = ?");
+      params.push(input.displayName);
+    }
+    if (input.description !== undefined) {
+      updates.push("description = ?");
+      params.push(input.description);
+    }
+    if (input.notes !== undefined) {
+      updates.push("notes = ?");
+      params.push(input.notes);
+    }
+    if (updates.length > 0) {
+      params.push(input.project);
+      db.prepare(
+        `UPDATE projects SET ${updates.join(", ")} WHERE slug = ?`,
+      ).run(...params);
+    }
+  }
+}
+
+export function setProjectMetadata(
+  db: Ledger,
+  value: unknown,
+): ProjectMetadata {
+  const input = validateProjectMetadataInput(value);
+  return db.transaction(() => {
+    upsertProjectMetadata(db, input);
+    const row = db
+      .prepare("SELECT * FROM projects WHERE slug = ?")
+      .get(input.project) as Record<string, unknown>;
+    return {
+      project: row.slug as string,
+      displayName: row.display_name as string,
+      ...(row.description ? { description: row.description as string } : {}),
+      ...(row.notes ? { notes: row.notes as string } : {}),
+      createdAt: row.created_at as string,
+    };
+  })();
+}
+
+export function listProjects(
+  db: Ledger,
+  options: { query?: string } = {},
+): ProjectOverview[] {
+  const query = options.query?.trim().toLowerCase();
+  const projects = db
+    .prepare("SELECT * FROM projects ORDER BY slug ASC")
+    .all() as Record<string, unknown>[];
+
+  const latestStatuses = current(db);
+  const statusMap = new Map<string, StatusEntry>();
+  for (const entry of latestStatuses) {
+    statusMap.set(entry.project, entry);
+  }
+
+  const overviews: ProjectOverview[] = projects.map((row) => {
+    const slug = row.slug as string;
+    const latestStatus = statusMap.get(slug);
+    return {
+      project: slug,
+      displayName: row.display_name as string,
+      ...(row.description ? { description: row.description as string } : {}),
+      ...(row.notes ? { notes: row.notes as string } : {}),
+      createdAt: row.created_at as string,
+      ...(latestStatus ? { latestStatus } : {}),
+    };
+  });
+
+  if (!query) return overviews;
+
+  return overviews.filter((overview) => {
+    if (overview.project.toLowerCase().includes(query)) return true;
+    if (overview.displayName.toLowerCase().includes(query)) return true;
+    if (overview.description?.toLowerCase().includes(query)) return true;
+    if (overview.notes?.toLowerCase().includes(query)) return true;
+    if (overview.latestStatus) {
+      if (overview.latestStatus.status.toLowerCase().includes(query))
+        return true;
+      if (overview.latestStatus.summary.toLowerCase().includes(query))
+        return true;
+      if (overview.latestStatus.progress?.toLowerCase().includes(query))
+        return true;
+      if (
+        overview.latestStatus.tags.some((t) => t.toLowerCase().includes(query))
+      )
+        return true;
+    }
+    return false;
+  });
 }
 
 export function addStatus(
@@ -126,9 +258,8 @@ function addValidatedStatus(
     }
   }
   const now = new Date().toISOString();
-  db.prepare(
-    "INSERT INTO projects(slug, display_name, created_at) VALUES (?, ?, ?) ON CONFLICT(slug) DO NOTHING",
-  ).run(input.project, input.project, now);
+  upsertProjectMetadata(db, { project: input.project });
+
   const project = db
     .prepare("SELECT id FROM projects WHERE slug = ?")
     .get(input.project) as { id: number };

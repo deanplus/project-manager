@@ -8,8 +8,11 @@ import {
   current,
   history,
   importStatuses,
+  listProjects,
   openLedger,
   parseTime,
+  type ProjectOverview,
+  setProjectMetadata,
   toPortableStatusEntry,
   ValidationError,
 } from "./index.js";
@@ -27,7 +30,11 @@ function parse(argv: string[]): { command: string[]; flags: Flags } {
       continue;
     }
     const key = token.slice(2);
-    if (key === "json") {
+    if (
+      key === "json" ||
+      key === "clear-description" ||
+      key === "clear-notes"
+    ) {
       if (flags[key] !== undefined)
         throw new ValidationError(`--${key} may only be supplied once`);
       flags[key] = true;
@@ -52,6 +59,8 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
       "project",
       "status",
       "summary",
+      "description",
+      "notes",
       "progress",
       "blocker",
       "next",
@@ -65,6 +74,20 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
   ],
   ["import", new Set(["file", "json"])],
   ["current", new Set(["project", "json"])],
+  ["projects", new Set(["query", "json"])],
+  ["list", new Set(["query", "json"])],
+  [
+    "set-project",
+    new Set([
+      "project",
+      "display-name",
+      "description",
+      "notes",
+      "clear-description",
+      "clear-notes",
+      "json",
+    ]),
+  ],
   [
     "history",
     new Set(["project", "since", "until", "limit", "offset", "json"]),
@@ -80,7 +103,7 @@ function validateInvocation(command: string[], flags: Flags): string {
     typeof action === "string" ? allowedFlags.get(action) : undefined;
   if (typeof action !== "string" || !allowed)
     throw new ValidationError(
-      "usage: pmgr <add|import|current|history|at|export> (or: pmgr status <action>)",
+      "usage: pmgr <add|import|current|projects|list|set-project|history|at|export> (or: pmgr status <action>)",
     );
   const positional = command.slice(statusCommand ? 2 : 1);
   if (action === "import") {
@@ -139,6 +162,30 @@ function output(
   } else write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+function formatProjectOverview(item: ProjectOverview): string {
+  const lines = [`${item.project}\t${item.displayName}`];
+  if (item.description) lines.push(`  Description: ${item.description}`);
+  if (item.notes) lines.push(`  Notes: ${item.notes}`);
+  if (item.latestStatus) {
+    lines.push(
+      `  Latest Status: ${item.latestStatus.status}\t${item.latestStatus.occurredAt}\t${item.latestStatus.summary}`,
+    );
+  } else {
+    lines.push(`  Latest Status: (none)`);
+  }
+  return lines.join("\n");
+}
+
+function outputProjects(
+  items: ProjectOverview[],
+  json: boolean,
+  write: (text: string) => void,
+): void {
+  if (json) write(`${JSON.stringify(items)}\n`);
+  else if (items.length === 0) write("No projects found.\n");
+  else write(`${items.map(formatProjectOverview).join("\n")}\n`);
+}
+
 function imported(file: string): unknown[] {
   if (!file) throw new ValidationError("import file is required");
   const content = readFileSync(file, "utf8").trim();
@@ -172,10 +219,16 @@ export function run(
   const json = flags.json === true;
   try {
     switch (action) {
-      case "add":
+      case "add": {
+        const project = stringFlag(flags, "project", true) as string;
+        const description = stringFlag(flags, "description");
+        const notes = stringFlag(flags, "notes");
+        if (description !== undefined || notes !== undefined) {
+          setProjectMetadata(db, { project, description, notes });
+        }
         output(
           addStatus(db, {
-            project: stringFlag(flags, "project", true),
+            project,
             status: stringFlag(flags, "status", true),
             summary: stringFlag(flags, "summary", true),
             progress: stringFlag(flags, "progress"),
@@ -191,6 +244,8 @@ export function run(
           write,
         );
         break;
+      }
+
       case "import":
         output(
           importStatuses(
@@ -208,6 +263,52 @@ export function run(
       case "current":
         output(current(db, stringFlag(flags, "project")), json, write);
         break;
+      case "projects":
+      case "list":
+        outputProjects(
+          listProjects(db, { query: stringFlag(flags, "query") }),
+          json,
+          write,
+        );
+        break;
+      case "set-project": {
+        const project = stringFlag(flags, "project", true) as string;
+        const displayName = stringFlag(flags, "display-name");
+        let description: string | null | undefined = undefined;
+        if (flags["clear-description"] === true) {
+          if (flags.description !== undefined)
+            throw new ValidationError(
+              "cannot specify both --description and --clear-description",
+            );
+          description = null;
+        } else if (flags.description !== undefined) {
+          description = stringFlag(flags, "description");
+        }
+
+        let notes: string | null | undefined = undefined;
+        if (flags["clear-notes"] === true) {
+          if (flags.notes !== undefined)
+            throw new ValidationError(
+              "cannot specify both --notes and --clear-notes",
+            );
+          notes = null;
+        } else if (flags.notes !== undefined) {
+          notes = stringFlag(flags, "notes");
+        }
+
+        output(
+          setProjectMetadata(db, {
+            project,
+            displayName,
+            description,
+            notes,
+          }),
+          json,
+          write,
+        );
+        break;
+      }
+
       case "history":
         output(
           history(db, stringFlag(flags, "project"), {

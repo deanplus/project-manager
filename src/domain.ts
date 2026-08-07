@@ -12,6 +12,25 @@ export const sources = ["human", "agent", "import"] as const;
 export type ProjectStatus = (typeof statuses)[number];
 export type Source = (typeof sources)[number];
 
+export type ProjectMetadata = {
+  project: string;
+  displayName: string;
+  description?: string;
+  notes?: string;
+  createdAt: string;
+};
+
+export type ProjectOverview = ProjectMetadata & {
+  latestStatus?: StatusEntry;
+};
+
+export type ProjectMetadataInput = {
+  project: string;
+  displayName?: string;
+  description?: string | null;
+  notes?: string | null;
+};
+
 export type StatusEntryInput = {
   project: string;
   status: ProjectStatus;
@@ -50,6 +69,12 @@ const keys = new Set([
   "source",
   "externalRef",
 ]);
+const projectMetadataKeys = new Set([
+  "project",
+  "displayName",
+  "description",
+  "notes",
+]);
 const projectName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export class ValidationError extends Error {
@@ -73,6 +98,21 @@ function text(
   return normalized;
 }
 
+function nullableText(
+  value: unknown,
+  field: string,
+): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string")
+    throw new ValidationError(`${field} must be a string or null`);
+  const normalized = value.trim();
+  if (normalized === "") return null;
+  if (normalized.length > 2_000)
+    throw new ValidationError(`${field} must be at most 2000 characters`);
+  return normalized;
+}
+
 function textList(value: unknown, field: string): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 100)
@@ -91,6 +131,31 @@ export function parseTime(value: unknown, field: string): string {
     throw new ValidationError(`${field} must be a valid ISO 8601 timestamp`);
   }
   return new Date(value).toISOString();
+}
+
+export function validateProjectMetadataInput(
+  value: unknown,
+): ProjectMetadataInput {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new ValidationError("project metadata must be an object");
+  const input = value as Record<string, unknown>;
+  for (const key of Object.keys(input))
+    if (!projectMetadataKeys.has(key))
+      throw new ValidationError(`unknown field: ${key}`);
+  const project = text(input.project, "project", true) as string;
+  if (!projectName.test(project))
+    throw new ValidationError(
+      "project must use letters, numbers, dots, underscores, or hyphens",
+    );
+  const displayName = text(input.displayName, "displayName");
+  const description = nullableText(input.description, "description");
+  const notes = nullableText(input.notes, "notes");
+  return {
+    project,
+    ...(displayName !== undefined ? { displayName } : {}),
+    ...(description !== undefined ? { description } : {}),
+    ...(notes !== undefined ? { notes } : {}),
+  };
 }
 
 export function validateStatusEntry(
@@ -135,19 +200,18 @@ export function validateStatusEntry(
 }
 
 export function toPortableStatusEntry(entry: StatusEntry): PortableStatusEntry {
-  return {
+  const result: PortableStatusEntry = {
     project: entry.project,
     status: entry.status,
     summary: entry.summary,
-    ...(entry.progress === undefined ? {} : { progress: entry.progress }),
     blockers: entry.blockers,
     nextSteps: entry.nextSteps,
     decisions: entry.decisions,
     tags: entry.tags,
     occurredAt: entry.occurredAt,
     source: entry.source,
-    ...(entry.externalRef === undefined
-      ? {}
-      : { externalRef: entry.externalRef }),
   };
+  if (entry.progress !== undefined) result.progress = entry.progress;
+  if (entry.externalRef !== undefined) result.externalRef = entry.externalRef;
+  return result;
 }

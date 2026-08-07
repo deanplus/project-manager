@@ -36,8 +36,8 @@ The CLI accepts `pmgr <action>` for `add`, `import`, `current`, `history`, `at`,
 
 The database contains three structures:
 
-- `schema_migrations`: Applied migration versions.
-- `projects`: Project slug, display name, and creation time.
+- `schema_migrations`: Applied migration versions (1: base tables, 2: project description & notes columns).
+- `projects`: Project slug, display name, description, notes, and creation time.
 - `status_entries`: Immutable status snapshots and their project foreign keys.
 
 Key `status_entries` fields:
@@ -55,7 +55,7 @@ The `project_id, occurred_at DESC, id DESC` index supports current-status and hi
 
 ## Initialization and migrations
 
-After opening the database, `openLedger()` enables foreign keys, creates the migration table, and checks for and applies migration 1 within a `BEGIN IMMEDIATE` transaction. The immediate transaction prevents migration checks and writes from interleaving when several local processes open the database for the first time at once.
+After opening the database, `openLedger()` enables foreign keys, creates the migration table, and checks for and applies migrations 1 and 2 within a `BEGIN IMMEDIATE` transaction. The immediate transaction prevents migration checks and writes from interleaving when several local processes open the database for the first time at once.
 
 The database path is read from `PMGR_DB_PATH` first; otherwise, it uses the absolute path `~/.local/share/project-mgr/project-mgr.sqlite`, resolved from the current user's home directory. Non-memory databases create their parent directory automatically.
 
