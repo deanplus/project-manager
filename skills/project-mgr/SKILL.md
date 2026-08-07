@@ -13,6 +13,8 @@ Use `npx --yes --package project-mgr pmgr`. In a source checkout, use `pnpm pmgr
 - For exploratory or test work, set `PMGR_DB_PATH` to a dedicated absolute SQLite path for every command. Do not use `:memory:` when more than one CLI invocation must share data.
 - Query before writing. `add` appends a snapshot; it does not edit the previous one.
 - Set `--source agent` for agent-authored updates. Use `--external-ref` only when a stable idempotency key is available.
+- If the project is not yet in the ledger database, initialize its metadata with `set-project`, backfill 3–5 historical major changes/milestones using `add` (setting appropriate historical `--at` timestamps), and then append the latest status snapshot.
+
 
 ## Operations
 
