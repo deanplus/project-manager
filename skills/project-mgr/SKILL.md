@@ -1,6 +1,6 @@
 ---
 name: project-mgr
-description: Manage project status with the local-first project-mgr CLI. Use when an AI agent needs to add an append-only project update, set project descriptions/notes, list or fuzzy-search projects, import status records, query current or historical project state, or export a status ledger.
+description: Manage project status with the local-first project-mgr CLI. Use when an AI agent needs to add an append-only project update, set project descriptions/notes, list or fuzzy-search projects, start the local Web Dashboard, import status records, query current or historical project state, or export a status ledger.
 ---
 
 # project-mgr
@@ -24,10 +24,12 @@ Prefer `--json` for data that must be interpreted or reported programmatically.
 npx --yes --package project-mgr pmgr set-project --project my-project --description "Project summary" --notes "Internal notes" --json
 npx --yes --package project-mgr pmgr set-project --project my-project --clear-description --clear-notes --json
 
-
 # List all projects or fuzzy search across project names, descriptions, notes, status summaries, and tags.
 npx --yes --package project-mgr pmgr projects --json
 npx --yes --package project-mgr pmgr list --query "keyword" --json
+
+# Start the local Web Dashboard & REST API server.
+npx --yes --package project-mgr pmgr serve --port 3000 --no-open --json
 
 # Add an agent-authored status snapshot (status defaults to completed if omitted).
 npx --yes --package project-mgr pmgr add --project my-project --summary "Implemented the CLI" \
