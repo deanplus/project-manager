@@ -168,13 +168,14 @@ pnpm start at \
 
 ## 状态写入
 
-`add` 必须提供：
+`add` 必需参数：
 
-- `--project`：项目唯一名称，只能使用英文字母、数字、`.`、`_`、`-`，并以字母或数字开头。
-- `--status`：`idea`、`planned`、`active`、`blocked`、`paused`、`completed` 或 `archived`。
-- `--summary`：本次状态摘要。
+- `--project`：唯一的项目名称。可包含英文字母、数字、`.`、`_` 和 `-`，且必须以字母或数字开头。
+- `--summary`：本次动态的摘要。
 
 可选参数：
+
+- `--status`：`idea`、`planned`、`active`、`blocked`、`paused`、`completed`、`archived` 之一（`done` 可作为 `completed` 的别名）。若省略则默认值为 `completed`。
 
 - `--description`：项目简介/描述（更新项目元数据）。
 - `--notes`：项目备注（更新项目元数据）。
@@ -236,18 +237,45 @@ pnpm start import --file statuses.jsonl --json
 
 未知字段、未知 CLI 参数、多余位置参数、非法状态和无时区时间都会被拒绝。
 
+## 本地 Web 画布 (Web Server)
+
+启动本地 HTTP 服务器，在浏览器中可视化查看项目概览与项目动态（Timeline 演进）：
+
+```bash
+pmgr serve
+```
+
+默认情况下，`pmgr serve` 监听 `http://127.0.0.1:3000` 并自动在默认浏览器中打开页面。
+
+可选项：
+
+- `--port`：HTTP 服务器端口（默认 `3000` 或环境变量 `PORT`）。
+- `--host`：绑定主机地址（默认 `127.0.0.1`）。
+- `--no-open`：禁止自动打开浏览器。
+- `--json`：以 JSON 格式输出服务器启动信息。
+
+### REST API 接口
+
+服务器同时暴露以下 JSON API 接口：
+
+- `GET /api/projects`：列出项目概览（支持 `?query=...` 检索）。
+- `GET /api/projects/:slug`：查看指定项目的元数据与最新状态。
+- `GET /api/history`：查看全量或指定项目的状态动态演进（支持 `?project=...`, `?since=...`, `?until=...`, `?limit=...`, `?offset=...`）。
+- `GET /api/stats`：查看整体统计指标（项目总数、不同状态分布、动态总条数）。
+
 ## 查询与导出
 
-| 命令          | 用途                                     | 主要选项                                                                                                    |
-| ------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `projects`    | 列出所有项目或按关键词模糊匹配搜索项目   | `--query`、`--json`                                                                                         |
-| `set-project` | 设置/更新/清空项目的显示名称、简介与备注 | `--project`、`--display-name`、`--description`、`--notes`、`--clear-description`、`--clear-notes`、`--json` |
-| `current`     | 所有项目或单项目的当前状态               | `--project`、`--json`                                                                                       |
-| `history`     | 全部或单个项目的历史，最新记录在前       | `--project`、`--since`、`--until`、`--limit`、`--offset`、`--json`                                          |
-| `at`          | 指定时间点及之前的最后状态               | `--project`、`--at`、`--json`                                                                               |
-| `export`      | 导出全部或单项目记录                     | `--project`、`--format json\|jsonl`                                                                         |
+| 命令          | 用途                                      | 主要选项                                                                                                    |
+| ------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `projects`    | 列出所有项目或按关键词模糊匹配搜索项目    | `--query`、`--json`                                                                                         |
+| `set-project` | 设置/更新/清空项目的显示名称、简介与备注  | `--project`、`--display-name`、`--description`、`--notes`、`--clear-description`、`--clear-notes`、`--json` |
+| `current`     | 所有项目或单项目的当前状态                | `--project`、`--json`                                                                                       |
+| `history`     | 全部或单个项目的历史，最新记录在前        | `--project`、`--since`、`--until`、`--limit`、`--offset`、`--json`                                          |
+| `at`          | 指定时间点及之前的最后状态                | `--project`、`--at`、`--json`                                                                               |
+| `export`      | 导出全部或单项目记录                      | `--project`、`--format json\|jsonl`                                                                         |
+| `serve`       | 启动本地 HTTP 服务器与 Web 动态可视化画布 | `--port`、`--host`、`--open`、`--no-open`、`--json`                                                         |
 
-全部 action 仍可使用 `status <action>` 的兼容形式，例如 `pmgr status projects`。人类可读的多条结果按项目及其最新状态输出；为空时输出 `No entries found.` 或 `No projects found.`。`add`、`import`、`current`、`projects`、`list`、`set-project`、`history`、`at` 支持 `--json`；`export` 由 `--format` 控制格式。
+全部 action 仍可使用 `status <action>` 的兼容形式，例如 `pmgr status projects`。人类可读的多条结果按项目及其最新状态输出；为空时输出 `No entries found.` 或 `No projects found.`。`add`、`import`、`current`、`projects`、`list`、`set-project`、`history`、`at`、`serve` 支持 `--json`；`export` 由 `--format` 控制格式。
 
 导出内容不包含数据库内部的 `id` 和 `recordedAt`，可以直接重新导入。记录按时间从旧到新导出，从而在恢复时保留相同时间戳记录的先后关系：
 

@@ -171,10 +171,11 @@ pnpm start at \
 `add` requires:
 
 - `--project`: Unique project name. It may contain English letters, numbers, `.`, `_`, and `-`, and must start with a letter or number.
-- `--status`: One of `idea`, `planned`, `active`, `blocked`, `paused`, `completed`, or `archived`.
 - `--summary`: A summary of this status.
 
 Optional arguments:
+
+- `--status`: One of `idea`, `planned`, `active`, `blocked`, `paused`, `completed`, or `archived` (`done` is accepted as an alias for `completed`). Defaults to `completed` if omitted.
 
 - `--description`: Project introduction or description (updates project metadata).
 - `--notes`: Project notes/remarks (updates project metadata).
@@ -236,6 +237,32 @@ pnpm start import --file statuses.jsonl --json
 
 Unknown fields, unknown CLI options, extra positional arguments, invalid statuses, and timestamps without a timezone are rejected.
 
+## Local Web Dashboard
+
+Launch a local HTTP server to view project overviews and project activity history in your browser:
+
+```bash
+pmgr serve
+```
+
+By default, `pmgr serve` listens on `http://127.0.0.1:3000` and automatically opens the web dashboard in your default browser.
+
+Options:
+
+- `--port`: HTTP server port (default: `3000` or `PORT` environment variable).
+- `--host`: Host interface to bind (default: `127.0.0.1`).
+- `--no-open`: Do not automatically open the web browser.
+- `--json`: Output server startup details in JSON format.
+
+### REST API Endpoints
+
+The server also exposes JSON API endpoints:
+
+- `GET /api/projects`: List project overviews (supports `?query=...`).
+- `GET /api/projects/:slug`: Detailed metadata and latest status of a specific project.
+- `GET /api/history`: Timeline activity log across all or specific projects (supports `?project=...`, `?since=...`, `?until=...`, `?limit=...`, `?offset=...`).
+- `GET /api/stats`: Overview metrics (total projects count, status breakdowns, total activity entries count).
+
 ## Query and export
 
 | Command       | Purpose                                               | Key options                                                                                                 |
@@ -246,8 +273,9 @@ Unknown fields, unknown CLI options, extra positional arguments, invalid statuse
 | `history`     | History for all projects or one project, newest first | `--project`, `--since`, `--until`, `--limit`, `--offset`, `--json`                                          |
 | `at`          | The latest status at or before a specified time       | `--project`, `--at`, `--json`                                                                               |
 | `export`      | Export all records or one project's records           | `--project`, `--format json\|jsonl`                                                                         |
+| `serve`       | Start local HTTP server & interactive web dashboard   | `--port`, `--host`, `--open`, `--no-open`, `--json`                                                         |
 
-All actions can also use the compatible `status <action>` form, for example `pmgr status projects`. Human-readable multi-record results list projects and their latest status, or `No entries found.` / `No projects found.` when empty. `add`, `import`, `current`, `projects`, `list`, `set-project`, `history`, and `at` support `--json`; `export` uses `--format` to select its format.
+All actions can also use the compatible `status <action>` form, for example `pmgr status projects`. Human-readable multi-record results list projects and their latest status, or `No entries found.` / `No projects found.` when empty. `add`, `import`, `current`, `projects`, `list`, `set-project`, `history`, `at`, and `serve` support `--json`; `export` uses `--format` to select its format.
 
 Exports omit the database-internal `id` and `recordedAt` fields and can be imported directly. Records are exported from oldest to newest so that restoring them preserves the insertion order of records with the same timestamp:
 

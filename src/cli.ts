@@ -12,7 +12,9 @@ import {
   openLedger,
   parseTime,
   type ProjectOverview,
+  type ProjectStatus,
   setProjectMetadata,
+  startServer,
   toPortableStatusEntry,
   ValidationError,
 } from "./index.js";
@@ -33,7 +35,9 @@ function parse(argv: string[]): { command: string[]; flags: Flags } {
     if (
       key === "json" ||
       key === "clear-description" ||
-      key === "clear-notes"
+      key === "clear-notes" ||
+      key === "open" ||
+      key === "no-open"
     ) {
       if (flags[key] !== undefined)
         throw new ValidationError(`--${key} may only be supplied once`);
@@ -94,6 +98,7 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
   ],
   ["at", new Set(["project", "at", "json"])],
   ["export", new Set(["project", "format"])],
+  ["serve", new Set(["port", "host", "open", "no-open", "json"])],
 ]);
 
 function validateInvocation(command: string[], flags: Flags): string {
@@ -103,7 +108,7 @@ function validateInvocation(command: string[], flags: Flags): string {
     typeof action === "string" ? allowedFlags.get(action) : undefined;
   if (typeof action !== "string" || !allowed)
     throw new ValidationError(
-      "usage: pmgr <add|import|current|projects|list|set-project|history|at|export> (or: pmgr status <action>)",
+      "usage: pmgr <add|import|current|projects|list|set-project|history|at|export|serve> (or: pmgr status <action>)",
     );
   const positional = command.slice(statusCommand ? 2 : 1);
   if (action === "import") {
@@ -212,7 +217,7 @@ function imported(file: string): unknown[] {
 export function run(
   argv: string[],
   write = process.stdout.write.bind(process.stdout),
-): void {
+): unknown {
   const { command, flags } = parse(argv);
   const action = validateInvocation(command, flags);
   const db = openLedger();
@@ -229,7 +234,7 @@ export function run(
         output(
           addStatus(db, {
             project,
-            status: stringFlag(flags, "status", true),
+            status: stringFlag(flags, "status") as unknown as ProjectStatus,
             summary: stringFlag(flags, "summary", true),
             progress: stringFlag(flags, "progress"),
             blockers: listFlag(flags, "blocker"),
@@ -352,9 +357,30 @@ export function run(
         else throw new ValidationError("--format must be json or jsonl");
         break;
       }
+
+      case "serve": {
+        const port =
+          flags.port !== undefined
+            ? numberFlag(flags, "port", 3000)
+            : undefined;
+        const host = stringFlag(flags, "host");
+        const open = flags["no-open"] === true ? false : true;
+        return startServer({ port, host, open, db }).then((instance) => {
+          if (json) {
+            write(
+              `${JSON.stringify({ url: instance.url, port: instance.port, host: instance.host })}\n`,
+            );
+          } else {
+            write(`Server running at ${instance.url}\n`);
+          }
+          return instance;
+        });
+      }
     }
   } finally {
-    db.close();
+    if (action !== "serve") {
+      db.close();
+    }
   }
 }
 
@@ -364,7 +390,7 @@ if (
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 ) {
   try {
-    run(process.argv.slice(2));
+    await run(process.argv.slice(2));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

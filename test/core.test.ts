@@ -9,6 +9,7 @@ import { run } from "../src/cli.js";
 import {
   addStatus,
   at,
+  countEntries,
   current,
   databasePath,
   history,
@@ -57,6 +58,21 @@ test("domain normalizes valid values and rejects invalid input", () => {
       source: "human",
       externalRef: "ref",
     },
+  );
+  assert.equal(
+    validateStatusEntry({
+      project: "default-status",
+      summary: "sum",
+    }).status,
+    "completed",
+  );
+  assert.equal(
+    validateStatusEntry({
+      project: "done-status",
+      status: "done",
+      summary: "sum",
+    }).status,
+    "completed",
   );
   assert.ok(
     validateStatusEntry({
@@ -225,13 +241,33 @@ test("SQLite ledger migrates, appends, is idempotent, and queries by timeline", 
   });
 
   // Create project with tag for search
-  addStatus(db, entry({ project: "tag-proj", tags: ["my-special-tag"] }));
-  const matchedTag = listProjects(db, { query: "my-special-tag" });
-  assert.equal(matchedTag.length, 1);
-  assert.equal(matchedTag[0].project, "tag-proj");
-
-  const allProjects = listProjects(db);
-  assert.equal(allProjects.length, 5);
+  addStatus(
+    db,
+    entry({ project: "tag-proj", tags: ["nomatch", "my-special-tag"] }),
+  );
+  // Add projects with identical timestamps to exercise fallback tie-breaker
+  addStatus(
+    db,
+    entry({ project: "twin-a", occurredAt: "2026-05-01T00:00:00.000Z" }),
+  );
+  addStatus(
+    db,
+    entry({ project: "twin-b", occurredAt: "2026-05-01T00:00:00.000Z" }),
+  );
+  // Add a project with an even newer status entry timestamp to test descending sort
+  addStatus(
+    db,
+    entry({ project: "newest-proj", occurredAt: "2026-12-31T00:00:00.000Z" }),
+  );
+  // Add project with undefined progress for query filtering test
+  addStatus(db, {
+    project: "no-progress-proj",
+    summary: "no progress summary",
+  });
+  const matchedNoProg = listProjects(db, { query: "no progress summary" });
+  assert.equal(matchedNoProg.length, 1);
+  const noMatch = listProjects(db, { query: "non-existent-tag-query" });
+  assert.equal(noMatch.length, 0);
 
   const matchedNotes = listProjects(db, { query: "Updated Notes" });
   assert.equal(matchedNotes.length, 1);
@@ -243,6 +279,9 @@ test("SQLite ledger migrates, appends, is idempotent, and queries by timeline", 
 
   const matchedNone = listProjects(db, { query: "nonexistent" });
   assert.equal(matchedNone.length, 0);
+
+  assert.equal(countEntries(db) > 0, true);
+  assert.equal(countEntries(db, "tag-proj"), 1);
 
   // Test clearing description and notes with null or empty string
   const clearedMeta = setProjectMetadata(db, {

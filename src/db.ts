@@ -207,6 +207,15 @@ export function listProjects(
     };
   });
 
+  overviews.sort((a, b) => {
+    const timeA = a.latestStatus?.occurredAt ?? a.createdAt;
+    const timeB = b.latestStatus?.occurredAt ?? b.createdAt;
+    if (timeA !== timeB) {
+      return timeB.localeCompare(timeA);
+    }
+    return a.project.localeCompare(b.project);
+  });
+
   if (!query) return overviews;
 
   return overviews.filter((overview) => {
@@ -215,16 +224,13 @@ export function listProjects(
     if (overview.description?.toLowerCase().includes(query)) return true;
     if (overview.notes?.toLowerCase().includes(query)) return true;
     if (overview.latestStatus) {
-      if (overview.latestStatus.status.toLowerCase().includes(query))
-        return true;
-      if (overview.latestStatus.summary.toLowerCase().includes(query))
-        return true;
-      if (overview.latestStatus.progress?.toLowerCase().includes(query))
-        return true;
-      if (
-        overview.latestStatus.tags.some((t) => t.toLowerCase().includes(query))
-      )
-        return true;
+      const st = overview.latestStatus;
+      const match =
+        st.status.toLowerCase().includes(query) ||
+        st.summary.toLowerCase().includes(query) ||
+        (st.progress && st.progress.toLowerCase().includes(query)) ||
+        st.tags.some((t) => t.toLowerCase().includes(query));
+      if (match) return true;
     }
     return false;
   });
@@ -349,4 +355,19 @@ export function at(
     project,
     occurredAt,
   );
+}
+
+export function countEntries(db: Ledger, project?: string): number {
+  if (project) {
+    const row = db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM status_entries e JOIN projects p ON p.id = e.project_id WHERE p.slug = ?",
+      )
+      .get(project) as { count: number };
+    return row.count;
+  }
+  const row = db
+    .prepare("SELECT COUNT(*) AS count FROM status_entries")
+    .get() as { count: number };
+  return row.count;
 }

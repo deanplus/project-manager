@@ -173,7 +173,16 @@ export function validateStatusEntry(
     throw new ValidationError(
       "project must use letters, numbers, dots, underscores, or hyphens",
     );
-  if (!statuses.includes(input.status as ProjectStatus))
+  let statusInput = input.status;
+  if (statusInput === undefined || statusInput === null) {
+    statusInput = "completed";
+  } else if (
+    typeof statusInput === "string" &&
+    statusInput.trim().toLowerCase() === "done"
+  ) {
+    statusInput = "completed";
+  }
+  if (!statuses.includes(statusInput as ProjectStatus))
     throw new ValidationError("status is invalid");
   const source = input.source === undefined ? defaultSource : input.source;
   if (!sources.includes(source as Source))
@@ -183,7 +192,7 @@ export function validateStatusEntry(
     throw new ValidationError("externalRef must be at most 200 characters");
   return {
     project,
-    status: input.status as ProjectStatus,
+    status: statusInput as ProjectStatus,
     summary: text(input.summary, "summary", true) as string,
     progress: text(input.progress, "progress"),
     blockers: textList(input.blockers, "blockers"),

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0 - 2026-08-07
+
+### Added
+
+- Added local HTTP Web Server & SPA Dashboard via `pmgr serve` (`GET /`, REST API `/api/projects`, `/api/history`, `/api/stats`).
+- Added Activity Feed date filtering with native Date Picker (defaulting to Today's local date).
+- Added Activity Feed Grouping Mode toggle: Grouped by Project (Default) vs Flat List.
+- Made `--status` parameter in `pmgr add` optional (defaults to `completed`, with `done` as a normalized alias).
+- Added `countEntries` query for accurate database metrics.
+- Fixed XSS vulnerability in Web UI event handling via HTML5 data attribute event delegation.
+- Added descending project sorting by latest update timestamp.
+
 ## 0.1.7 - 2026-08-07
 
 ### Added

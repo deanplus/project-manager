@@ -15,7 +15,6 @@ Use `npx --yes --package project-mgr pmgr`. In a source checkout, use `pnpm pmgr
 - Set `--source agent` for agent-authored updates. Use `--external-ref` only when a stable idempotency key is available.
 - If the project is not yet in the ledger database, initialize its metadata with `set-project`, backfill 3–5 historical major changes/milestones using `add` (setting appropriate historical `--at` timestamps), and then append the latest status snapshot.
 
-
 ## Operations
 
 Prefer `--json` for data that must be interpreted or reported programmatically.
@@ -30,8 +29,8 @@ npx --yes --package project-mgr pmgr set-project --project my-project --clear-de
 npx --yes --package project-mgr pmgr projects --json
 npx --yes --package project-mgr pmgr list --query "keyword" --json
 
-# Add an agent-authored status snapshot (optionally with project description or notes).
-npx --yes --package project-mgr pmgr add --project my-project --status active --summary "Implemented the CLI" \
+# Add an agent-authored status snapshot (status defaults to completed if omitted).
+npx --yes --package project-mgr pmgr add --project my-project --summary "Implemented the CLI" \
   --description "Project description" --progress "Tests pass" --next "Publish the package" --source agent --json
 
 # Query current state, history, or state at a time.
