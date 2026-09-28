@@ -178,7 +178,7 @@ Optional arguments:
 - `--status`: One of `idea`, `planned`, `active`, `blocked`, `paused`, `completed`, or `archived` (`done` is accepted as an alias for `completed`). Defaults to `completed` if omitted.
 
 - `--description`: Project introduction or description (updates project metadata).
-- `--notes`: Project notes/remarks (updates project metadata).
+- `--notes`: Persistent, medium-to-long-term project notes/remarks (e.g., architectural constraints, key caveats; updates project metadata).
 - `--progress`: Work already completed.
 - `--blocker`, `--next`, `--decision`, and `--tag`: May be specified repeatedly.
 - `--at`: When the status actually occurred. It must be an ISO 8601 timestamp with a timezone; defaults to the current time.

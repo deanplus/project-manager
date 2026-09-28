@@ -178,7 +178,7 @@ pnpm start at \
 - `--status`：`idea`、`planned`、`active`、`blocked`、`paused`、`completed`、`archived` 之一（`done` 可作为 `completed` 的别名）。若省略则默认值为 `completed`。
 
 - `--description`：项目简介/描述（更新项目元数据）。
-- `--notes`：项目备注（更新项目元数据）。
+- `--notes`：中长期项目备注（如架构约束、长期备忘、关键限制等；更新项目元数据）。
 - `--progress`：已经完成的工作。
 - `--blocker`、`--next`、`--decision`、`--tag`：可以重复传入。
 - `--at`：状态实际发生时间，必须是带时区的 ISO 8601 时间；缺省为当前时间。

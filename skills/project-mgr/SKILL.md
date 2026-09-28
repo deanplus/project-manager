@@ -15,6 +15,15 @@ Use `npx --yes --package project-mgr pmgr`. In a source checkout, use `pnpm pmgr
 - Set `--source agent` for agent-authored updates. Use `--external-ref` only when a stable idempotency key is available.
 - If the project is not yet in the ledger database, initialize its metadata with `set-project`, backfill 3–5 historical major changes/milestones using `add` (setting appropriate historical `--at` timestamps), and then append the latest status snapshot.
 
+## Metadata vs. status entries
+
+- **Project notes (`--notes`)**: Reserved for persistent, medium-to-long-term project context (e.g., architectural constraints, permanent tech stack choices, long-term goals, or critical environment caveats).
+  - Manage notes via `set-project --project <name> --notes "..."`.
+  - **Do NOT** put transient progress, session logs, or one-off status messages into `--notes`.
+  - Avoid passing `--notes` during routine `add` commands to prevent accidentally overwriting long-term project notes.
+- **Project description (`--description`)**: A high-level, stable summary of the project's purpose.
+- **Status snapshots (`add`)**: Use `--summary` (concise milestone headline), `--progress` (detailed work accomplished), `--next` (immediate next steps), `--blocker` (current obstacles), and `--decision` for transactional, append-only updates.
+
 ## Operations
 
 Prefer `--json` for data that must be interpreted or reported programmatically.
@@ -33,7 +42,7 @@ npx --yes --package project-mgr pmgr serve --port 3000 --no-open --json
 
 # Add an agent-authored status snapshot (status defaults to completed if omitted).
 npx --yes --package project-mgr pmgr add --project my-project --summary "Implemented the CLI" \
-  --description "Project description" --progress "Tests pass" --next "Publish the package" --source agent --json
+  --progress "Tests pass" --next "Publish the package" --source agent --json
 
 # Query current state, history, or state at a time.
 npx --yes --package project-mgr pmgr current --project my-project --json
