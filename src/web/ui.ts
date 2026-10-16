@@ -54,7 +54,7 @@ ${WEB_UI_STYLES}
       <button class="tab-btn active" id="tabProjects" data-i18n="projects" onclick="switchTab('projects')">${dict.projects}</button>
       <button class="tab-btn" id="tabActivity" data-i18n="activityFeed" onclick="switchTab('activity')">${dict.activityFeed}</button>
     </div>
-    <button class="btn" id="btnRefresh" data-i18n="refresh" onclick="fetchData()">${dict.refresh}</button>
+    <button class="btn" id="btnRefresh" data-i18n="refresh" onclick="refreshData()">${dict.refresh}</button>
   </div>
 
   <main>
@@ -72,7 +72,7 @@ ${WEB_UI_STYLES}
       <div class="activity-toolbar">
         <div class="date-picker-wrapper">
           <label for="activityDateInput" id="labelActivityDate" data-i18n="dateLabel">${dict.dateLabel}</label>
-          <input type="date" id="activityDateInput" class="date-input" onchange="render()" />
+          <input type="date" id="activityDateInput" class="date-input" onchange="changeActivityDate()" />
           <button class="btn btn-sm" id="btnDateToday" data-i18n="today" onclick="setActivityDateToday()">${dict.today}</button>
           <button class="btn btn-sm" id="btnShowAllDates" data-i18n="showAllDates" onclick="clearActivityDate()">${dict.showAllDates}</button>
         </div>
@@ -81,6 +81,7 @@ ${WEB_UI_STYLES}
           <button class="mode-btn" id="modeFlat" data-i18n="flatList" onclick="setActivityGroupMode('flat')">${dict.flatList}</button>
         </div>
       </div>
+      <button id="btnBackToActivities" class="btn" type="button" data-i18n="backToActivities" onclick="returnToActivityList()" hidden>${dict.backToActivities}</button>
       <div id="timelineContainer" class="timeline"></div>
     </div>
   </main>

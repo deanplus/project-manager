@@ -211,7 +211,7 @@ test("SQLite ledger migrates, appends, is idempotent, and queries by timeline", 
         count: number;
       }
     ).count,
-    2,
+    3,
   );
 
   // Test setProjectMetadata & listProjects
@@ -621,11 +621,11 @@ test("CLI supports add, import, reads, errors, project metadata, and export form
   );
   const exported = execute(["status", "export", "--format", "json"]);
   assert.match(exported, /imported/);
-  assert.doesNotMatch(exported, /"recordedAt"|"id"/);
+  assert.doesNotMatch(exported, /"id"/);
   assert.match(execute(["status", "export"]), /imported/);
   assert.equal(
     execute(["export", "--project", "missing", "--format", "jsonl"]),
-    "",
+    '{"version":2,"entries":[],"completions":[]}\n',
   );
   assert.equal(
     execute(["history", "--project", "missing"]),

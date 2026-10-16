@@ -32,6 +32,7 @@ export type ProjectMetadataInput = {
 };
 
 export type StatusEntryInput = {
+  uid?: string;
   project: string;
   status: ProjectStatus;
   summary: string;
@@ -52,11 +53,24 @@ export type StatusEntry = Required<
   progress?: string;
   externalRef?: string;
   recordedAt: string;
+  effectiveStatus?: ProjectStatus;
+  isCurrent?: boolean;
+  completedBy?: {
+    uid: string;
+    id: number;
+    summary: string;
+    occurredAt: string;
+    recordedAt: string;
+  };
 };
 
-export type PortableStatusEntry = Omit<StatusEntry, "id" | "recordedAt">;
+export type PortableStatusEntry = Omit<
+  StatusEntry,
+  "id" | "recordedAt" | "effectiveStatus" | "isCurrent" | "completedBy"
+>;
 
 const keys = new Set([
+  "uid",
   "project",
   "status",
   "summary",
@@ -191,6 +205,7 @@ export function validateStatusEntry(
   if (externalRef && externalRef.length > 200)
     throw new ValidationError("externalRef must be at most 200 characters");
   return {
+    ...(input.uid === undefined ? {} : { uid: validateUid(input.uid) }),
     project,
     status: statusInput as ProjectStatus,
     summary: text(input.summary, "summary", true) as string,
@@ -210,6 +225,7 @@ export function validateStatusEntry(
 
 export function toPortableStatusEntry(entry: StatusEntry): PortableStatusEntry {
   const result: PortableStatusEntry = {
+    uid: entry.uid,
     project: entry.project,
     status: entry.status,
     summary: entry.summary,
@@ -223,4 +239,15 @@ export function toPortableStatusEntry(entry: StatusEntry): PortableStatusEntry {
   if (entry.progress !== undefined) result.progress = entry.progress;
   if (entry.externalRef !== undefined) result.externalRef = entry.externalRef;
   return result;
+}
+
+export function validateUid(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
+      value,
+    )
+  )
+    throw new ValidationError("uid must be a lowercase UUID");
+  return value;
 }

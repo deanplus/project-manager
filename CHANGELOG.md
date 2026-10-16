@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Explicit completion of multiple predecessor activities, append-only revocation, and completion-source links in the activity feed.
+- Independent Current/Superseded markers, preserved original snapshot details, and a direct entry route with a return-to-list control.
+- Migration 3 adds portable entry and event identities and rejects obsolete writers that omit entry UUIDs.
+
+### Changed
+
+- Export is now a version-2 bundle rather than a JSON array or entry-per-line JSONL. JSONL emits one complete bundle per line. Existing consumers must adapt; legacy imports remain supported.
+- Imports preserve completion history and recording times, reject conflicting identities atomically, and deduplicate version-2 re-imports. Independently migrated legacy databases may require restoring into a fresh database due to differing UUIDs.
+
+### Fixed
+
+- Invalid percent-encoding in entry/project detail routes returns 400 instead of 500.
+
 ## 0.2.0 - 2026-08-07
 
 ### Added

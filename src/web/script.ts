@@ -5,6 +5,7 @@ export function getWebUIScript(initialLang: Locale): string {
 
     let projectsData = [];
     let historyData = [];
+    let focusedEntry = null;
     let activeProjectFilter = null;
     let activeGroupMode = 'grouped';
 
@@ -48,8 +49,19 @@ export function getWebUIScript(initialLang: Locale): string {
         }
 
         render();
+        if (typeof location !== 'undefined') {
+          const ref = new URLSearchParams(location.search).get('entry');
+          if (ref) {
+            switchTab('activity');
+            const response = await fetch('/api/entries/' + encodeURIComponent(ref));
+            if (!response.ok) throw new Error('Entry unavailable');
+            focusedEntry = await response.json();
+            render();
+          }
+        }
       } catch (err) {
         console.error('Failed to load data', err);
+        document.getElementById('timelineContainer').textContent = t('entryLoadError');
       }
     }
 
@@ -60,12 +72,41 @@ export function getWebUIScript(initialLang: Locale): string {
       document.getElementById('viewActivity').classList.toggle('active', tab === 'activity');
     }
 
+    function clearEntryFocus() {
+      focusedEntry = null;
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('entry');
+        window.history.replaceState(null, '', url);
+      }
+    }
+
+    function returnToActivityList() {
+      clearEntryFocus();
+      activeProjectFilter = null;
+      document.getElementById('searchInput').value = '';
+      document.getElementById('activityDateInput').value = '';
+      render();
+    }
+
+    function refreshData() {
+      clearEntryFocus();
+      return fetchData();
+    }
+
+    function changeActivityDate() {
+      clearEntryFocus();
+      render();
+    }
+
     function setActivityDateToday() {
+      clearEntryFocus();
       document.getElementById('activityDateInput').value = getTodayDateString();
       render();
     }
 
     function clearActivityDate() {
+      clearEntryFocus();
       document.getElementById('activityDateInput').value = '';
       render();
     }
@@ -78,17 +119,19 @@ export function getWebUIScript(initialLang: Locale): string {
     }
 
     function filterByProject(slug) {
+      clearEntryFocus();
       activeProjectFilter = slug;
       switchTab('activity');
       render();
     }
 
     function clearProjectFilter() {
+      clearEntryFocus();
       activeProjectFilter = null;
       render();
     }
 
-    document.getElementById('searchInput').addEventListener('input', render);
+    document.getElementById('searchInput').addEventListener('input', () => { clearEntryFocus(); render(); });
 
     function formatTime(isoStr) {
       if (!isoStr) return '';
@@ -101,17 +144,24 @@ export function getWebUIScript(initialLang: Locale): string {
     }
 
     function renderTimelineItem(item) {
+      const status = item.effectiveStatus || item.status;
       return \`
-        <div class="timeline-item">
+        <div class="timeline-item" id="entry-\${escapeHtml(item.uid || item.id)}">
           <div class="timeline-header">
             <div class="timeline-meta">
               <span class="project-tag" data-action="filter-project" data-project="\${escapeHtml(item.project)}">\${escapeHtml(item.project)}</span>
-              <span class="status-badge status-\${item.status}">\${escapeHtml(formatStatus(item.status))}</span>
+              <span class="status-badge status-\${escapeHtml(status)}">\${escapeHtml(formatStatus(status))}</span>
+              <span class="source-badge">\${escapeHtml(t(item.isCurrent ? "currentStatus" : "superseded"))}</span>
               <span class="source-badge">\${escapeHtml(t('sourcePrefix'))}\${escapeHtml(formatSource(item.source))}</span>
             </div>
             <div class="time-stamp">\${formatTime(item.occurredAt)}</div>
           </div>
           <div class="entry-summary">\${escapeHtml(item.summary)}</div>
+          \${item.completedBy ? \`<div class="completion-evidence">
+            <a class="link-btn" href="?entry=\${encodeURIComponent(item.completedBy.uid)}">\${escapeHtml(t('completedBy'))}: #\${item.completedBy.id} — \${escapeHtml(item.completedBy.summary)}</a>
+            <div>\${escapeHtml(t('followUpTime'))} \${formatTime(item.completedBy.occurredAt)}</div>
+            <div>\${escapeHtml(t('completionRecorded'))} \${formatTime(item.completedBy.recordedAt)}</div>
+          </div><details><summary>\${escapeHtml(t('originalRecord'))} · \${escapeHtml(t('originalStatus'))} \${escapeHtml(formatStatus(item.status))}</summary>\` : ''}
           \${item.progress ? \`<div class="entry-progress"><strong>\${escapeHtml(t('progressLabel'))}</strong> \${escapeHtml(item.progress)}</div>\` : ''}
 
           \${item.blockers && item.blockers.length ? \`
@@ -146,6 +196,7 @@ export function getWebUIScript(initialLang: Locale): string {
               \${item.tags.map(tag => \`<span class="pill-tag">#\${escapeHtml(tag)}</span>\`).join('')}
             </div>
           \` : ''}
+          \${item.completedBy ? '</details>' : ''}
         </div>
       \`;
     }
@@ -228,13 +279,17 @@ export function getWebUIScript(initialLang: Locale): string {
         }).join('');
       }
 
+      document.getElementById('btnBackToActivities').hidden = !focusedEntry;
+
       // Render Timeline Feed
       const timelineContainer = document.getElementById('timelineContainer');
-      const filteredHistory = historyData.filter(h => {
+      const filteredHistory = focusedEntry ? [focusedEntry] : historyData.filter(h => {
         if (activeProjectFilter && h.project !== activeProjectFilter) return false;
         if (selectedDate && getLocalDateString(h.occurredAt) !== selectedDate) return false;
         if (!query) return true;
         return h.project.toLowerCase().includes(query) ||
+               (h.effectiveStatus || h.status).toLowerCase().includes(query) ||
+               formatStatus(h.effectiveStatus || h.status).toLowerCase().includes(query) ||
                h.status.toLowerCase().includes(query) ||
                formatStatus(h.status).toLowerCase().includes(query) ||
                h.summary.toLowerCase().includes(query) ||

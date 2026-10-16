@@ -208,6 +208,7 @@ export const WEB_UI_STYLES = `    :root {
       color: #ffffff;
     }
 
+    .btn[hidden] { display: none !important; }
     .btn {
       background: var(--card-bg);
       border: 1px solid var(--border);
@@ -406,6 +407,8 @@ export const WEB_UI_STYLES = `    :root {
       font-family: monospace;
     }
 
+    .completion-evidence { margin: 12px 0; line-height: 1.7; }
+    details > summary { cursor: pointer; margin: 12px 0; }
     .status-badge {
       font-size: 0.75rem;
       font-weight: 600;

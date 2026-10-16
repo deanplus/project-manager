@@ -55,4 +55,14 @@ npx --yes --package project-mgr pmgr import statuses.jsonl --json
 npx --yes --package project-mgr pmgr export --project my-project --format jsonl > statuses.jsonl
 ```
 
-Use `PMGR_DB_PATH=/absolute/path/test.sqlite npx --yes --package project-mgr pmgr ...` to isolate a manual test database. Import validates the entire batch before one transaction writes it; export output can be imported directly.
+Use `PMGR_DB_PATH=/absolute/path/test.sqlite npx --yes --package project-mgr pmgr ...` to isolate a manual test database. Import validates and writes the entire batch within one transaction; export output can be imported directly.
+
+## Complete predecessor activities
+
+Before recording follow-up work, inspect `history --project <name> --json`, including the original `status`, `effectiveStatus`, and `completedBy` evidence. Do not interpret a missing completion link as unfinished work. Inspect older pages with `--offset` when needed.
+
+When this update resolves all commitments of earlier entries (including blockers and next steps), pass repeatable `--completes <id-or-uid>` to `add`. One follow-up may complete several entries. For partial progress, describe the remaining work and do not link. A commit/deployment is sufficient only when it resolves all the targeted entry's commitments.
+
+Use `complete --entry <id-or-uid> --by <id-or-uid> --source agent` for an existing follow-up. Use `revoke-completion --entry <id-or-uid> --by <id-or-uid> --reason "..." --source agent` to correct a mistaken link. Links require the same project and strictly increasing occurrence times. Query the affected history afterward to verify effective completion. Do not bulk-close old entries without evidence.
+
+Export produces version-2 bundles (one bundle per line for JSONL), preserving entry/event identities and audit history; legacy imports remain supported. `at` has no completion annotations. Project current state still comes from the latest snapshot.

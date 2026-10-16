@@ -7,6 +7,8 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   addStatus,
+  changeCompletion,
+  history,
   getWebUIHTML,
   handleRequest,
   openBrowser,
@@ -157,6 +159,37 @@ test("server handles Web UI and REST API request routing", () => {
   // Test 405 Method Not Allowed
   const postRes = simulateRequest(db, "POST", "/api/projects");
   assert.equal(postRes.statusCode, 405);
+
+  db.close();
+});
+
+test("entry detail endpoint includes completion evidence and handles missing entries", () => {
+  const db = openLedger(":memory:");
+  addStatus(db, { project: "alpha", summary: "Pending", status: "active" });
+  const original = history(db, "alpha")[0];
+  const followUp = addStatus(db, {
+    project: "alpha",
+    summary: "Accepted",
+    status: "active",
+    occurredAt: new Date(Date.parse(original.occurredAt) + 1000).toISOString(),
+  }).entry;
+  changeCompletion(db, original.uid, followUp.uid);
+  const detail = simulateRequest(db, "GET", `/api/entries/${original.uid}`);
+  assert.equal(detail.statusCode, 200);
+  assert.equal(
+    simulateRequest(db, "GET", `/api/entries/${original.id}`).statusCode,
+    200,
+  );
+  for (const url of ["/api/entries/%E0%A4%A", "/api/projects/%E0%A4%A"])
+    assert.equal(simulateRequest(db, "GET", url).statusCode, 400);
+  assert.equal(
+    (detail.json() as { effectiveStatus: string }).effectiveStatus,
+    "completed",
+  );
+  assert.equal(
+    simulateRequest(db, "GET", "/api/entries/missing").statusCode,
+    404,
+  );
 
   db.close();
 });
@@ -353,6 +386,7 @@ test("getWebUIHTML defaults to Chinese and supports zh/en i18n switching", async
   const html = getWebUIHTML();
   assert.ok(typeof html === "string");
   assert.ok(html.includes("<!DOCTYPE html>"));
+  assert.match(html, /\.btn\[hidden\]\s*\{\s*display: none !important;/);
   assert.ok(html.includes('<html lang="zh-CN">'));
   assert.ok(html.includes("<title>项目管理 - 项目与动态概览</title>"));
   assert.ok(html.includes('id="appTitle" data-i18n="appTitle">项目管理</h1>'));
@@ -545,6 +579,55 @@ test("getWebUIHTML defaults to Chinese and supports zh/en i18n switching", async
     assert.notEqual((context.t as (k: string) => string)(key), key);
   }
 
+  const renderItem = context.renderTimelineItem as (entry: unknown) => string;
+  const completedItem = {
+    id: 1,
+    uid: "old",
+    project: "alpha",
+    status: "active",
+    effectiveStatus: "completed",
+    isCurrent: false,
+    source: "agent",
+    summary: "Review",
+    progress: "Original detail",
+    blockers: ["acceptance"],
+    nextSteps: ["deploy"],
+    tags: [],
+    occurredAt: "2026-08-07T00:00:00Z",
+    completedBy: {
+      uid: "new",
+      id: 2,
+      summary: "<script>done</script>",
+      occurredAt: "2026-08-08T00:00:00Z",
+      recordedAt: "2026-08-09T00:00:00Z",
+    },
+  };
+  const card = renderItem(completedItem);
+  assert.match(card, /已完成/);
+  assert.match(card, /已有后续更新/);
+  assert.match(card, /由后续动态完成/);
+  assert.match(card, /当时状态：.*进行中/);
+  assert.match(card, /href="\?entry=new"/);
+  assert.match(card, /&lt;script&gt;/);
+  assert.match(card, /<details>/);
+  assert.match(card, /Original detail/);
+  runInNewContext(
+    "focusedEntry = " + JSON.stringify(completedItem) + "; render();",
+    context,
+  );
+  assert.match(getElement("timelineContainer").innerHTML, /已完成/);
+  (context.setActivityGroupMode as (mode: string) => void)("flat");
+  assert.match(getElement("timelineContainer").innerHTML, /已完成/);
+  (context.setLang as (lang: string) => void)("en");
+  assert.match(
+    getElement("timelineContainer").innerHTML,
+    /Completed by follow-up/,
+  );
+  (context.setLang as (lang: string) => void)("zh");
+  (context.clearActivityDate as () => void)();
+
+  (context.setActivityGroupMode as (mode: string) => void)("grouped");
+
   // Switch to English via setLang('en') and ignore invalid locale
   (context.setLang as (lang: string) => void)("invalid");
   assert.equal(getElement("appTitle").textContent, "项目管理");
@@ -597,6 +680,38 @@ test("getWebUIHTML defaults to Chinese and supports zh/en i18n switching", async
   assert.equal(getElement("appTitle").textContent, "项目管理");
   assert.equal(getElement("btnLangZh").active, true);
   assert.equal(getElement("btnLangEn").active, false);
+
+  const originalFetch = context.fetch as (url: string) => Promise<unknown>;
+  context.location = { search: "?entry=new" };
+  context.URLSearchParams = URLSearchParams;
+  const requests: string[] = [];
+  context.fetch = async (url: string) => {
+    requests.push(url);
+    if (url === "/api/entries/new")
+      return { ok: true, json: async () => ({ ...completedItem, uid: "new" }) };
+    return originalFetch(url);
+  };
+  await (context.fetchData as () => Promise<void>)();
+  assert.ok(requests.includes("/api/entries/new"));
+  assert.match(getElement("timelineContainer").innerHTML, /由后续动态完成/);
+  (context.setLang as (lang: string) => void)("en");
+  assert.match(
+    getElement("timelineContainer").innerHTML,
+    /Completed by follow-up/,
+  );
+  (context.returnToActivityList as () => void)();
+  assert.match(getElement("timelineContainer").innerHTML, /2 updates/);
+  context.fetch = async (url: string) =>
+    url === "/api/entries/new" ? { ok: false } : originalFetch(url);
+  context.console = { error: () => {} };
+  await (context.fetchData as () => Promise<void>)();
+  assert.equal(
+    getElement("timelineContainer").textContent,
+    "Could not load activity. Please retry.",
+  );
+  context.location = { search: "" };
+  context.fetch = originalFetch;
+  await (context.refreshData as () => Promise<void>)();
 
   // Verify pre-seeded localStorage ("en") and throwing localStorage fallback
   storage.set("pmgr_lang", "en");

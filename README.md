@@ -298,3 +298,24 @@ pnpm build
 ```
 
 Coverage thresholds for statements, branches, functions, and lines are all 100%. See the [architecture document](docs/architecture.md) for the detailed design.
+
+## Completing earlier activities
+
+Project status and activity completion are separate. Inspect `pmgr history --project demo --json` before linking entries. `status` is the original snapshot; `effectiveStatus` includes explicit follow-up completion, and `isCurrent` identifies the latest project snapshot. Missing `completedBy` does not mean an entry is unfinished.
+
+```bash
+# One update completes multiple older entries (local numeric IDs or portable UUIDs).
+pmgr add --project demo --status active --summary "Deployment accepted" \
+  --completes 12 --completes 15 --source agent --json
+# Link an existing follow-up, or correct an erroneous link without deleting history.
+pmgr complete --entry 12 --by 18 --source agent --json
+pmgr revoke-completion --entry 12 --by 18 --reason "Acceptance still pending" --source agent --json
+```
+
+Only link entries whose entire outstanding work is resolved, including blockers and next steps. Same-project links require a strictly later follow-up occurrence time; equal-time links are rejected. A target has one active completion source. Repeating that link is a no-op; revoke before replacing it. `add --completes` writes the snapshot, metadata, and links atomically. Existing history is not automatically reconciled.
+
+Activity cards display Completed with a follow-up link and retain original details in an expandable section. Current/Superseded identifies snapshot recency independently of completion. `/api/entries/<id-or-uid>` and `/?entry=<uid>` open an entry even outside the initial activity page. Date filters select snapshots; completion annotations reflect today's result. `at` continues returning the historical project snapshot without completion evidence; historical completion queries are deferred.
+
+Export now emits a version-2 bundle `{ "version": 2, "entries": [...], "completions": [...] }`. JSONL emits one complete bundle per line. Entries retain UUIDs and recording times; events retain UUIDs and per-target predecessor links, including revocations. Import accepts legacy entry objects/arrays/JSONL and version-2 bundles, checks identity conflicts, and applies each file atomically. Re-importing the same bundle is idempotent. Event order is significant: import events in exported order; divergent histories fail instead of silently merging. Older clients cannot import version-2 bundles. Migration adds UUIDs to existing snapshots without changing their content.
+
+Independently migrated copies of legacy data receive different UUIDs. Cross-import may fail on an existing `externalRef`; no implicit identity adoption occurs. Restore a bundle into a fresh database for a faithful migration. Older writers are rejected if they omit UUIDs. With an existing `externalRef`, `add` retains its existing snapshot and applies explicitly supplied `--completes` links to that snapshot; identical active links are no-ops. Use `complete` to make after-the-fact reconciliation explicit.

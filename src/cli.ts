@@ -7,7 +7,10 @@ import {
   at,
   current,
   history,
-  importStatuses,
+  importLedger,
+  exportLedger,
+  changeCompletion,
+  type Source,
   listProjects,
   openLedger,
   parseTime,
@@ -15,12 +18,11 @@ import {
   type ProjectStatus,
   setProjectMetadata,
   startServer,
-  toPortableStatusEntry,
   ValidationError,
 } from "./index.js";
 
 type Flags = Record<string, string | string[] | boolean>;
-const repeats = new Set(["next", "blocker", "decision", "tag"]);
+const repeats = new Set(["next", "blocker", "decision", "tag", "completes"]);
 
 function parse(argv: string[]): { command: string[]; flags: Flags } {
   const command: string[] = [];
@@ -73,9 +75,12 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
       "at",
       "source",
       "external-ref",
+      "completes",
       "json",
     ]),
   ],
+  ["complete", new Set(["entry", "by", "reason", "source", "json"])],
+  ["revoke-completion", new Set(["entry", "by", "reason", "source", "json"])],
   ["import", new Set(["file", "json"])],
   ["current", new Set(["project", "json"])],
   ["projects", new Set(["query", "json"])],
@@ -108,7 +113,7 @@ function validateInvocation(command: string[], flags: Flags): string {
     typeof action === "string" ? allowedFlags.get(action) : undefined;
   if (typeof action !== "string" || !allowed)
     throw new ValidationError(
-      "usage: pmgr <add|import|current|projects|list|set-project|history|at|export|serve> (or: pmgr status <action>)",
+      "usage: pmgr <add|complete|revoke-completion|import|current|projects|list|set-project|history|at|export|serve> (or: pmgr status <action>)",
     );
   const positional = command.slice(statusCommand ? 2 : 1);
   if (action === "import") {
@@ -160,7 +165,7 @@ function output(
     const rows = value
       .map(
         (entry) =>
-          `${entry.project}\t${entry.status}\t${entry.occurredAt}\t${entry.summary}`,
+          `${entry.project}\t${entry.effectiveStatus ?? entry.status}\t${entry.occurredAt}\t${entry.summary}${entry.completedBy ? ` (completed by #${entry.completedBy.id}; original: ${entry.status})` : ""}`,
       )
       .join("\n");
     write(`${rows || "No entries found."}\n`);
@@ -228,32 +233,53 @@ export function run(
         const project = stringFlag(flags, "project", true) as string;
         const description = stringFlag(flags, "description");
         const notes = stringFlag(flags, "notes");
-        if (description !== undefined || notes !== undefined) {
-          setProjectMetadata(db, { project, description, notes });
-        }
+        const result = db
+          .transaction(() => {
+            if (description !== undefined || notes !== undefined) {
+              setProjectMetadata(db, { project, description, notes });
+            }
+            return addStatus(
+              db,
+              {
+                project,
+                status: stringFlag(flags, "status") as unknown as ProjectStatus,
+                summary: stringFlag(flags, "summary", true),
+                progress: stringFlag(flags, "progress"),
+                blockers: listFlag(flags, "blocker"),
+                nextSteps: listFlag(flags, "next"),
+                decisions: listFlag(flags, "decision"),
+                tags: listFlag(flags, "tag"),
+                occurredAt: stringFlag(flags, "at"),
+                source: stringFlag(flags, "source"),
+                externalRef: stringFlag(flags, "external-ref"),
+              },
+              "human",
+              listFlag(flags, "completes"),
+            ).entry;
+          })
+          .immediate();
+        output(result, json, write);
+        break;
+      }
+
+      case "complete":
+      case "revoke-completion":
         output(
-          addStatus(db, {
-            project,
-            status: stringFlag(flags, "status") as unknown as ProjectStatus,
-            summary: stringFlag(flags, "summary", true),
-            progress: stringFlag(flags, "progress"),
-            blockers: listFlag(flags, "blocker"),
-            nextSteps: listFlag(flags, "next"),
-            decisions: listFlag(flags, "decision"),
-            tags: listFlag(flags, "tag"),
-            occurredAt: stringFlag(flags, "at"),
-            source: stringFlag(flags, "source"),
-            externalRef: stringFlag(flags, "external-ref"),
-          }).entry,
+          changeCompletion(
+            db,
+            stringFlag(flags, "entry", true) as string,
+            stringFlag(flags, "by", true) as string,
+            action === "complete" ? "complete" : "revoke",
+            stringFlag(flags, "reason"),
+            (stringFlag(flags, "source") ?? "human") as Source,
+          ),
           json,
           write,
         );
         break;
-      }
-
       case "import":
         output(
-          importStatuses(
+          importLedger(
             db,
             imported(
               stringFlag(flags, "file") ??
@@ -342,19 +368,12 @@ export function run(
         );
         break;
       case "export": {
-        const entries = history(db, stringFlag(flags, "project"), {
-          limit: -1,
-        })
-          .reverse()
-          .map(toPortableStatusEntry);
+        const bundle = exportLedger(db, stringFlag(flags, "project"));
         const format = stringFlag(flags, "format") ?? "json";
-        if (format === "jsonl")
-          write(
-            entries.map((entry) => JSON.stringify(entry)).join("\n") +
-              (entries.length ? "\n" : ""),
-          );
-        else if (format === "json") output(entries, true, write);
-        else throw new ValidationError("--format must be json or jsonl");
+        if (format !== "json" && format !== "jsonl")
+          throw new ValidationError("--format must be json or jsonl");
+        // JSONL contains one versioned bundle per line, preserving event order.
+        output(bundle, true, write);
         break;
       }
 

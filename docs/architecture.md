@@ -30,15 +30,16 @@ SQLite file
 
 `src/index.ts` exports only public types and functions. Business validation does not depend on the CLI, so bulk imports and direct database API calls use the same rules.
 
-The CLI accepts `pmgr <action>` for `add`, `import`, `current`, `history`, `at`, and `export`; `pmgr status <action>` remains a compatible form. Both forms share the same validation and execution path.
+The CLI accepts `pmgr <action>` for `add`, `import`, `current`, `history`, `at`, `export`, `complete`, and `revoke-completion`; `pmgr status <action>` remains a compatible form. Both forms share the same validation and execution path.
 
 ## Data model
 
-The database contains three structures:
+The database contains four structures:
 
-- `schema_migrations`: Applied migration versions (1: base tables, 2: project description & notes columns).
+- `schema_migrations`: Applied migration versions (1: base tables, 2: project description & notes columns, 3: portable identities and completion events).
 - `projects`: Project slug, display name, description, notes, and creation time.
-- `status_entries`: Immutable status snapshots and their project foreign keys.
+- `status_entries`: Immutable status snapshots, stable UUIDs, and project foreign keys.
+- `completion_events`: Append-only complete/revoke events with UUIDs, source/target entry UUIDs, per-target predecessor UUIDs, recording time, author source, and optional reason.
 
 Key `status_entries` fields:
 
@@ -55,7 +56,7 @@ The `project_id, occurred_at DESC, id DESC` index supports current-status and hi
 
 ## Initialization and migrations
 
-After opening the database, `openLedger()` enables foreign keys, creates the migration table, and checks for and applies migrations 1 and 2 within a `BEGIN IMMEDIATE` transaction. The immediate transaction prevents migration checks and writes from interleaving when several local processes open the database for the first time at once.
+After opening the database, `openLedger()` enables foreign keys, creates the migration table, and checks for and applies migrations 1 through 3 within a `BEGIN IMMEDIATE` transaction. The immediate transaction prevents migration checks and writes from interleaving when several local processes open the database for the first time at once.
 
 The database path is read from `PMGR_DB_PATH` first; otherwise, it uses the absolute path `~/.local/share/project-mgr/project-mgr.sqlite`, resolved from the current user's home directory. Non-memory databases create their parent directory automatically.
 
@@ -82,9 +83,9 @@ All ISO 8601 timestamps are converted to UTC on write, so SQLite string ordering
 
 ## Import and export
 
-Complete records returned by database queries include the internal `id` and `recordedAt`. The export layer removes these read-only fields while preserving business fields, original source, and the idempotency key, so JSON and JSONL can pass strict input validation when imported again.
+Version-2 exports contain `{version: 2, entries, completions}`. Both JSON and JSONL emit a complete bundle, with one bundle per line for JSONL. Local numeric IDs and computed annotations are excluded; UUIDs, original source, occurrence/recording times, and all completion/revocation events are retained. Legacy entry-only objects, arrays, and JSONL remain importable. A file is applied atomically. UUID conflicts and divergent per-target event chains fail explicitly; repeated bundle imports are idempotent. Export reads raw snapshots in a single read transaction rather than computing discarded annotations.
 
-Exports have no record limit and reverse descending history results into oldest-to-newest order. When restoring to an empty database, entries with the same `occurredAt` receive IDs in their original append order, so the current status remains the same.
+Exports have no record limit and read raw snapshots directly in oldest-to-newest order. When restoring to an empty database, entries with the same `occurredAt` receive IDs in their original append order, so the current status remains the same.
 
 ## Consistency and limits
 
@@ -93,3 +94,11 @@ Exports have no record limit and reverse descending history results into oldest-
 - Current status is derived from history; no separate cache table can drift.
 - Version 1 is for trusted local users and includes no authentication, authorization, multi-user synchronization, or encryption.
 - JSON arrays are stored as text. Evaluate a normalized schema only when cross-field full-text search or complex tag statistics are needed.
+
+## Activity completion
+
+`add --completes` inserts the snapshot and explicit links atomically. `complete` links an existing follow-up; `revoke-completion` appends a correction with a required reason. Only strictly later same-project follow-ups are valid. Exactly one active completion source is allowed per target. Original snapshot fields remain unchanged.
+
+History/current/detail reads return original status, effective status, recency, and completion evidence independently of pagination/date filters. `at` retains snapshot-only semantics. Cards display Completed plus a navigable source while retaining original details. The project current state still comes from the latest snapshot.
+
+Migration 3 backfills random UUIDs and rejects inserts lacking a UUID, so old writers fail explicitly instead of creating unreadable records. Independently migrated copies of legacy data have different UUIDs; importing across them may fail on an existing external reference. There is no automatic identity adoption or cross-database reconciliation. Export from one authoritative ledger and restore into a fresh database when migrating.

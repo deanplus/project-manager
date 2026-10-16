@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -11,6 +13,10 @@ import {
   validateProjectMetadataInput,
   validateStatusEntry,
   ValidationError,
+  toPortableStatusEntry,
+  validateUid,
+  parseTime,
+  sources,
 } from "./domain.js";
 
 export type Ledger = Database.Database;
@@ -79,6 +85,36 @@ export function openLedger(path = databasePath()): Ledger {
       db.exec(migration2);
       db.prepare("INSERT INTO schema_migrations(version) VALUES (2)").run();
     }
+    if (
+      !db.prepare("SELECT 1 FROM schema_migrations WHERE version = 3").get()
+    ) {
+      db.exec(`ALTER TABLE status_entries ADD COLUMN uid TEXT;
+        CREATE UNIQUE INDEX idx_entry_uid ON status_entries(uid);
+        CREATE TABLE completion_events (
+          id INTEGER PRIMARY KEY,
+          uid TEXT NOT NULL UNIQUE,
+          target_uid TEXT NOT NULL REFERENCES status_entries(uid),
+          by_uid TEXT NOT NULL REFERENCES status_entries(uid),
+          previous_uid TEXT REFERENCES completion_events(uid),
+          action TEXT NOT NULL CHECK(action IN ('complete', 'revoke')),
+          reason TEXT,
+          recorded_at TEXT NOT NULL,
+          source TEXT NOT NULL
+        );
+        CREATE INDEX idx_completion_target ON completion_events(target_uid, id DESC);`);
+      for (const row of db.prepare("SELECT id FROM status_entries").all() as {
+        id: number;
+      }[]) {
+        db.prepare("UPDATE status_entries SET uid = ? WHERE id = ?").run(
+          randomUUID(),
+          row.id,
+        );
+      }
+      db.exec(`CREATE TRIGGER require_entry_uid BEFORE INSERT ON status_entries
+        WHEN NEW.uid IS NULL
+        BEGIN SELECT RAISE(ABORT, 'entry uid required; upgrade the writer'); END;`);
+      db.prepare("INSERT INTO schema_migrations(version) VALUES (3)").run();
+    }
   }).immediate();
   return db;
 }
@@ -86,6 +122,7 @@ export function openLedger(path = databasePath()): Ledger {
 function entryFromRow(row: Record<string, unknown>): StatusEntry {
   return {
     id: row.id as number,
+    uid: row.uid as string,
     project: row.project as string,
     status: row.status as StatusEntry["status"],
     summary: row.summary as string,
@@ -240,15 +277,47 @@ export function addStatus(
   db: Ledger,
   value: unknown,
   defaultSource: Source = "human",
+  completes: string[] = [],
 ): InsertResult {
   const input = validateStatusEntry(value, defaultSource);
-  return db.transaction(() => addValidatedStatus(db, input))();
+  return db
+    .transaction(() => {
+      const result = addValidatedStatus(db, input);
+      for (const target of completes)
+        changeCompletion(
+          db,
+          target,
+          result.entry.uid,
+          "complete",
+          undefined,
+          input.source,
+        );
+      return result;
+    })
+    .immediate();
 }
 
 function addValidatedStatus(
   db: Ledger,
   input: StatusEntryInput & { occurredAt: string; source: Source },
+  recordedAt?: string,
 ): InsertResult {
+  if (input.uid) {
+    const existing = one(db, `${select} WHERE e.uid = ?`, input.uid);
+    if (existing) {
+      const candidate = toPortableStatusEntry({
+        ...input,
+        id: existing.id,
+        recordedAt: existing.recordedAt,
+      } as StatusEntry);
+      if (
+        !isDeepStrictEqual(toPortableStatusEntry(existing), candidate) ||
+        (recordedAt !== undefined && recordedAt !== existing.recordedAt)
+      )
+        throw new ValidationError("conflicting entry uid");
+      return { entry: existing, inserted: false };
+    }
+  }
   if (input.externalRef) {
     const existing = one(
       db,
@@ -256,6 +325,8 @@ function addValidatedStatus(
       input.externalRef,
     );
     if (existing) {
+      if (input.uid)
+        throw new ValidationError("externalRef conflicts with portable uid");
       if (existing.project !== input.project)
         throw new ValidationError(
           `externalRef is already used by project ${existing.project}`,
@@ -263,7 +334,7 @@ function addValidatedStatus(
       return { entry: existing, inserted: false };
     }
   }
-  const now = new Date().toISOString();
+  const now = recordedAt ?? new Date().toISOString();
   upsertProjectMetadata(db, { project: input.project });
 
   const project = db
@@ -271,8 +342,8 @@ function addValidatedStatus(
     .get(input.project) as { id: number };
   const result = db
     .prepare(
-      `INSERT INTO status_entries(project_id, status, summary, progress, blockers_json, next_steps_json, decisions_json, tags_json, occurred_at, recorded_at, source, external_ref)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO status_entries(project_id, status, summary, progress, blockers_json, next_steps_json, decisions_json, tags_json, occurred_at, recorded_at, source, external_ref, uid)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       project.id,
@@ -287,6 +358,7 @@ function addValidatedStatus(
       now,
       input.source,
       input.externalRef ?? null,
+      input.uid ?? randomUUID(),
     );
   return {
     entry: one(
@@ -312,7 +384,7 @@ export function current(db: Ledger, project?: string): StatusEntry[] {
       `${select} WHERE e.id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY occurred_at DESC, id DESC) AS position FROM status_entries) WHERE position = 1)${where} ORDER BY e.occurred_at DESC, e.id DESC`,
     )
     .all(...(project ? [project] : [])) as Record<string, unknown>[];
-  return rows.map(entryFromRow);
+  return rows.map((row) => annotateEntry(db, entryFromRow(row)));
 }
 
 export function history(
@@ -341,7 +413,7 @@ export function history(
       `${select}${clauses.length ? ` WHERE ${clauses.join(" AND ")}` : ""} ORDER BY e.occurred_at DESC, e.id DESC LIMIT ? OFFSET ?`,
     )
     .all(...params, limit, offset) as Record<string, unknown>[];
-  return rows.map(entryFromRow);
+  return rows.map((row) => annotateEntry(db, entryFromRow(row)));
 }
 
 export function at(
@@ -370,4 +442,286 @@ export function countEntries(db: Ledger, project?: string): number {
     .prepare("SELECT COUNT(*) AS count FROM status_entries")
     .get() as { count: number };
   return row.count;
+}
+
+export type CompletionEvent = {
+  uid: string;
+  targetUid: string;
+  byUid: string;
+  previousUid: string | null;
+  action: "complete" | "revoke";
+  reason?: string;
+  recordedAt: string;
+  source: Source;
+};
+
+function completionFromRow(row: Record<string, unknown>): CompletionEvent {
+  return {
+    uid: row.uid as string,
+    targetUid: row.target_uid as string,
+    byUid: row.by_uid as string,
+    previousUid: row.previous_uid as string | null,
+    action: row.action as CompletionEvent["action"],
+    ...(row.reason === null ? {} : { reason: row.reason as string }),
+    recordedAt: row.recorded_at as string,
+    source: row.source as Source,
+  };
+}
+
+function latestCompletion(
+  db: Ledger,
+  uid: string,
+): CompletionEvent | undefined {
+  const row = db
+    .prepare(
+      "SELECT * FROM completion_events WHERE target_uid = ? ORDER BY id DESC LIMIT 1",
+    )
+    .get(uid) as Record<string, unknown> | undefined;
+  return row && completionFromRow(row);
+}
+
+export function getEntry(db: Ledger, ref: string): StatusEntry | undefined {
+  const entry = /^\d+$/.test(ref)
+    ? one(db, `${select} WHERE e.id = ?`, ref)
+    : one(db, `${select} WHERE e.uid = ?`, ref);
+  return entry && annotateEntry(db, entry);
+}
+
+function annotateEntry(db: Ledger, entry: StatusEntry): StatusEntry {
+  const latest = latestCompletion(db, entry.uid);
+  const followUp =
+    latest?.action === "complete"
+      ? one(db, `${select} WHERE e.uid = ?`, latest.byUid)
+      : undefined;
+  const newest = one(
+    db,
+    `${select} WHERE p.slug = ? ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1`,
+    entry.project,
+  );
+  return {
+    ...entry,
+    effectiveStatus: followUp ? "completed" : entry.status,
+    isCurrent: newest?.id === entry.id,
+    ...(followUp && latest
+      ? {
+          completedBy: {
+            uid: followUp.uid,
+            id: followUp.id,
+            summary: followUp.summary,
+            occurredAt: followUp.occurredAt,
+            recordedAt: latest.recordedAt,
+          },
+        }
+      : {}),
+  };
+}
+
+function validateCompletionPair(
+  db: Ledger,
+  targetRef: string,
+  byRef: string,
+): [StatusEntry, StatusEntry] {
+  const target = getEntry(db, targetRef);
+  const by = getEntry(db, byRef);
+  if (!target || !by) throw new ValidationError("completion entry not found");
+  if (target.project !== by.project)
+    throw new ValidationError(
+      "completion entries must belong to the same project",
+    );
+  if (target.occurredAt >= by.occurredAt)
+    throw new ValidationError(
+      "completion target must have a strictly earlier occurrence time",
+    );
+  return [target, by];
+}
+
+function insertCompletion(db: Ledger, event: CompletionEvent): void {
+  const existing = db
+    .prepare("SELECT * FROM completion_events WHERE uid = ?")
+    .get(event.uid) as Record<string, unknown> | undefined;
+  if (existing) {
+    if (!isDeepStrictEqual(completionFromRow(existing), event))
+      throw new ValidationError("conflicting completion uid");
+    return;
+  }
+  validateCompletionPair(db, event.targetUid, event.byUid);
+  const latest = latestCompletion(db, event.targetUid);
+  // A per-target chain preserves event order and detects divergent imported histories.
+  if ((latest?.uid ?? null) !== event.previousUid)
+    throw new ValidationError(
+      "completion event order conflicts with target history",
+    );
+  if (event.action === "complete" && latest?.action === "complete")
+    throw new ValidationError("target already completed; revoke first");
+  if (
+    event.action === "revoke" &&
+    (latest?.action !== "complete" || latest.byUid !== event.byUid)
+  )
+    throw new ValidationError("no matching active completion to revoke");
+  db.prepare(
+    `INSERT INTO completion_events(uid, target_uid, by_uid, previous_uid, action, reason, recorded_at, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    event.uid,
+    event.targetUid,
+    event.byUid,
+    event.previousUid,
+    event.action,
+    event.reason ?? null,
+    event.recordedAt,
+    event.source,
+  );
+}
+
+export function changeCompletion(
+  db: Ledger,
+  targetRef: string,
+  byRef: string,
+  action: CompletionEvent["action"] = "complete",
+  reason?: string,
+  source: Source = "human",
+): CompletionEvent {
+  if (action !== "complete" && action !== "revoke")
+    throw new ValidationError("invalid completion action");
+  if (!sources.includes(source)) throw new ValidationError("source is invalid");
+  if (
+    reason !== undefined &&
+    (typeof reason !== "string" || !reason.trim() || reason.length > 2000)
+  )
+    throw new ValidationError(
+      "reason must be a non-empty string of at most 2000 characters",
+    );
+  if (action === "revoke" && !reason)
+    throw new ValidationError("revocation requires a reason");
+  return db
+    .transaction(() => {
+      const [target, by] = validateCompletionPair(db, targetRef, byRef);
+      const latest = latestCompletion(db, target.uid);
+      if (
+        action === "complete" &&
+        latest?.action === "complete" &&
+        latest.byUid === by.uid
+      )
+        return latest;
+      const event: CompletionEvent = {
+        uid: randomUUID(),
+        targetUid: target.uid,
+        byUid: by.uid,
+        previousUid: latest?.uid ?? null,
+        action,
+        ...(reason ? { reason: reason.trim() } : {}),
+        source,
+        recordedAt: new Date().toISOString(),
+      };
+      insertCompletion(db, event);
+      return event;
+    })
+    .immediate();
+}
+
+export function exportLedger(db: Ledger, project?: string) {
+  return db.transaction(() => {
+    const entries = (
+      db
+        .prepare(
+          `${select}${project ? " WHERE p.slug = ?" : ""} ORDER BY e.occurred_at, e.id`,
+        )
+        .all(...(project ? [project] : [])) as Record<string, unknown>[]
+    )
+      .map(entryFromRow)
+      .map((entry) => ({
+        ...toPortableStatusEntry(entry),
+        recordedAt: entry.recordedAt,
+      }));
+    const rows = db
+      .prepare(
+        `SELECT c.* FROM completion_events c JOIN status_entries e ON e.uid = c.target_uid JOIN projects p ON p.id = e.project_id ${project ? "WHERE p.slug = ?" : ""} ORDER BY c.id`,
+      )
+      .all(...(project ? [project] : [])) as Record<string, unknown>[];
+    return { version: 2, entries, completions: rows.map(completionFromRow) };
+  })();
+}
+
+function record(value: unknown, keys: string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new ValidationError("expected an object");
+  const result = value as Record<string, unknown>;
+  for (const key of Object.keys(result))
+    if (!keys.includes(key)) throw new ValidationError(`unknown field: ${key}`);
+  return result;
+}
+
+function validateCompletionEvent(value: unknown): CompletionEvent {
+  const row = record(value, [
+    "uid",
+    "targetUid",
+    "byUid",
+    "previousUid",
+    "action",
+    "reason",
+    "recordedAt",
+    "source",
+  ]);
+  if (row.action !== "complete" && row.action !== "revoke")
+    throw new ValidationError("invalid completion action");
+  if (!sources.includes(row.source as Source))
+    throw new ValidationError("source is invalid");
+  if (
+    row.reason !== undefined &&
+    (typeof row.reason !== "string" ||
+      !row.reason.trim() ||
+      row.reason.length > 2000)
+  )
+    throw new ValidationError("invalid completion reason");
+  if (row.action === "revoke" && !row.reason)
+    throw new ValidationError("revocation requires a reason");
+  return {
+    uid: validateUid(row.uid),
+    targetUid: validateUid(row.targetUid),
+    byUid: validateUid(row.byUid),
+    previousUid: row.previousUid === null ? null : validateUid(row.previousUid),
+    action: row.action,
+    ...(row.reason === undefined ? {} : { reason: row.reason as string }),
+    recordedAt: parseTime(row.recordedAt, "recordedAt"),
+    source: row.source as Source,
+  };
+}
+
+export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
+  // Both legacy entries and versioned bundles are accepted atomically, including JSONL.
+  return db
+    .transaction(() => {
+      const results: InsertResult[] = [];
+      for (const value of values) {
+        if (value && typeof value === "object" && "version" in value) {
+          const bundle = record(value, ["version", "entries", "completions"]);
+          if (
+            bundle.version !== 2 ||
+            !Array.isArray(bundle.entries) ||
+            !Array.isArray(bundle.completions)
+          )
+            throw new ValidationError("invalid ledger bundle");
+          for (const item of bundle.entries) {
+            if (!item || typeof item !== "object" || Array.isArray(item))
+              throw new ValidationError("entry must be an object");
+            const { recordedAt, ...input } = item as Record<string, unknown>;
+            validateUid(input.uid);
+            results.push(
+              addValidatedStatus(
+                db,
+                validateStatusEntry(input, "import"),
+                parseTime(recordedAt, "recordedAt"),
+              ),
+            );
+          }
+          for (const event of bundle.completions)
+            insertCompletion(db, validateCompletionEvent(event));
+        } else
+          results.push(
+            addValidatedStatus(db, validateStatusEntry(value, "import")),
+          );
+      }
+      return results;
+    })
+    .immediate();
 }

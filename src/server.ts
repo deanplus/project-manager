@@ -8,6 +8,7 @@ import {
 import { URL } from "node:url";
 import {
   countEntries,
+  getEntry,
   history,
   listProjects,
   openLedger,
@@ -81,6 +82,17 @@ export function handleRequest(
   );
   const pathname = reqUrl.pathname;
   const query = parseQueryParams(reqUrl);
+  let entryRef: string | undefined;
+  let projectSlug: string | undefined;
+  try {
+    if (pathname.startsWith("/api/entries/"))
+      entryRef = decodeURIComponent(pathname.slice("/api/entries/".length));
+    if (pathname.startsWith("/api/projects/"))
+      projectSlug = decodeURIComponent(pathname.slice("/api/projects/".length));
+  } catch {
+    sendJson(res, 400, { error: "Invalid URL encoding" });
+    return;
+  }
 
   if (pathname === "/" || pathname === "/index.html") {
     res.writeHead(200, {
@@ -98,7 +110,7 @@ export function handleRequest(
   }
 
   if (pathname.startsWith("/api/projects/")) {
-    const slug = decodeURIComponent(pathname.slice("/api/projects/".length));
+    const slug = projectSlug;
     const projects = listProjects(db);
     const target = projects.find((p) => p.project === slug);
     if (!target) {
@@ -106,6 +118,12 @@ export function handleRequest(
     } else {
       sendJson(res, 200, target);
     }
+    return;
+  }
+
+  if (pathname.startsWith("/api/entries/")) {
+    const entry = getEntry(db, entryRef as string);
+    sendJson(res, entry ? 200 : 404, entry ?? { error: "Entry not found" });
     return;
   }
 
