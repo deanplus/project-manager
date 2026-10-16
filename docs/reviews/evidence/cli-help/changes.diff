@@ -1,0 +1,318 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 9cd8351..891a999 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,9 @@
+ # Changelog
+ 
++## Unreleased
++
++- Add general and per-command CLI help, no-argument help, and package version aliases without opening the database.
++
+ ## 0.3.1 - 2026-10-16
+ 
+ ### Changed
+diff --git a/README.md b/README.md
+index 960f037..02756c1 100644
+--- a/README.md
++++ b/README.md
+@@ -127,6 +127,20 @@ Delete `/tmp/project-mgr-manual-test.sqlite` when it is no longer needed.
+ 
+ Automated tests use an in-memory database or SQLite files in the system temporary directory; they do not read or write the default database. `PMGR_DB_PATH=:memory:` also works for one command, but each CLI command runs in a separate process and its data disappears when the command exits, so it is not suitable for consecutive manual tests.
+ 
++## CLI help and version
++
++```bash
++pmgr                    # Show general help
++pmgr -h                 # Also: --help or help
++pmgr add --help          # Command usage and available options
++pmgr help history       # Equivalent to history -h
++pmgr -v                 # Also: -V, --version, or version
++```
++
++Help and version commands exit successfully without opening or creating a database.
++Version output comes from the installed package metadata. The compatible
++`pmgr status <command> --help` form is also supported.
++
+ ## Quick start
+ 
+ Append a project status:
+diff --git a/skills/project-mgr/SKILL.md b/skills/project-mgr/SKILL.md
+index af5e045..f1aeeca 100644
+--- a/skills/project-mgr/SKILL.md
++++ b/skills/project-mgr/SKILL.md
+@@ -7,7 +7,7 @@ description: Manage project status with the local-first project-mgr CLI. Use whe
+ 
+ ## CLI selection
+ 
+-Prefer an installed `pmgr`: locate it with `command -v pmgr` and check the installed package metadata/documentation for the required version and capabilities. The current CLI does not implement `--help` or `--version`; do not use those flags as health checks. In a source checkout, use `pnpm pmgr` only when the local dependencies are already installed and the package manager is available without downloading it.
++Prefer an installed `pmgr`: locate it with `command -v pmgr` and check the installed package metadata/documentation for the required version and capabilities. This source revision supports `-h` / `--help`, `help [command]`, and `-v` / `-V` / `--version` / `version` without opening the database. Older installed releases may not support these flags; inspect their package metadata instead. In a source checkout, use `pnpm pmgr` only when the local dependencies are already installed and the package manager is available without downloading it.
+ 
+ Do not automatically install or upgrade dependencies, or fall back to `npx` / `npm exec`. If no usable CLI is available, report the missing executable, dependency, or capability and the setup needed. Perform installation or upgrades only when the user authorizes that setup.
+ 
+diff --git a/src/cli.ts b/src/cli.ts
+index 4ffdb7b..7f8c6b4 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -22,25 +22,34 @@ import {
+ } from "./index.js";
+ 
+ type Flags = Record<string, string | string[] | boolean>;
++const booleanFlags = new Set([
++  "json",
++  "clear-description",
++  "clear-notes",
++  "open",
++  "no-open",
++  "help",
++  "version",
++]);
+ const repeats = new Set(["next", "blocker", "decision", "tag", "completes"]);
+ 
+ function parse(argv: string[]): { command: string[]; flags: Flags } {
+   const command: string[] = [];
+   const flags: Flags = Object.create(null) as Flags;
+   for (let index = 0; index < argv.length; index += 1) {
+-    const token = argv[index];
++    const raw = argv[index];
++    const token =
++      raw === "-h"
++        ? "--help"
++        : raw === "-v" || raw === "-V"
++          ? "--version"
++          : raw;
+     if (!token.startsWith("--")) {
+       command.push(token);
+       continue;
+     }
+     const key = token.slice(2);
+-    if (
+-      key === "json" ||
+-      key === "clear-description" ||
+-      key === "clear-notes" ||
+-      key === "open" ||
+-      key === "no-open"
+-    ) {
++    if (booleanFlags.has(key)) {
+       if (flags[key] !== undefined)
+         throw new ValidationError(`--${key} may only be supplied once`);
+       flags[key] = true;
+@@ -106,6 +115,83 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
+   ["serve", new Set(["port", "host", "open", "no-open", "json"])],
+ ]);
+ 
++const commandHelp: Record<string, [string, string]> = {
++  add: [
++    "Append a status snapshot",
++    "--project <name> --summary <text> [options]",
++  ],
++  complete: [
++    "Link a completed activity to its follow-up",
++    "--entry <id-or-uid> --by <id-or-uid> [options]",
++  ],
++  "revoke-completion": [
++    "Revoke an activity completion link",
++    "--entry <id-or-uid> --by <id-or-uid> [options]",
++  ],
++  import: [
++    "Import a JSON or JSONL ledger",
++    "<file> [--json] | --file <path> [--json]",
++  ],
++  current: [
++    "Show the latest status of each project",
++    "[--project <name>] [--json]",
++  ],
++  projects: ["List or search projects", "[--query <text>] [--json]"],
++  list: ["Alias for projects", "[--query <text>] [--json]"],
++  "set-project": ["Update project metadata", "--project <name> [options]"],
++  history: [
++    "Show status history, newest first",
++    "[--project <name>] [options]",
++  ],
++  at: [
++    "Show a project's status at a time",
++    "--project <name> --at <ISO-timestamp> [--json]",
++  ],
++  export: [
++    "Export a portable ledger",
++    "[--project <name>] [--format json|jsonl]",
++  ],
++  serve: [
++    "Start the local web dashboard",
++    "[--port <number>] [--host <address>] [--no-open] [--json]",
++  ],
++};
++
++function help(action?: string): string {
++  if (action) {
++    const [description, usage] = commandHelp[action];
++    const options = [...allowedFlags.get(action)!].map(
++      (key) =>
++        `  --${key}${booleanFlags.has(key) ? "" : " <value>"}${repeats.has(key) ? " (repeatable)" : ""}`,
++    );
++    return `Usage: pmgr ${action} ${usage}\n\n${description}\n\nOptions:\n${options.join("\n")}\n  -h, --help  Show this help\n`;
++  }
++  return `Usage: pmgr <command> [options]
++       pmgr status <command> [options]
++
++Local-first, append-only project status ledger.
++
++Commands:
++${Object.entries(commandHelp)
++  .map(([name, [description]]) => `  ${name.padEnd(20)}${description}`)
++  .join("\n")}
++  help [command]      Show general or command help
++  version             Show the installed package version
++
++Options:
++  -h, --help          Show help (also supported after a command)
++  -v, -V, --version   Show the installed package version
++
++Environment:
++  PMGR_DB_PATH        SQLite path (default: ~/.local/share/project-mgr/project-mgr.sqlite)
++
++Examples:
++  pmgr current --json
++  pmgr add --project demo --status active --summary "Work started"
++  pmgr help history
++`;
++}
++
+ function validateInvocation(command: string[], flags: Flags): string {
+   const statusCommand = command[0] === "status";
+   const action = command[statusCommand ? 1 : 0];
+@@ -224,6 +310,31 @@ export function run(
+   write = process.stdout.write.bind(process.stdout),
+ ): unknown {
+   const { command, flags } = parse(argv);
++  if (command[0] === "help") {
++    command.shift();
++    flags.help = true;
++  }
++  if (argv.length === 0 || flags.help === true) {
++    delete flags.help;
++    const action =
++      command.length || Object.keys(flags).length
++        ? validateInvocation(command, flags)
++        : undefined;
++    write(help(action));
++    return;
++  }
++  if (flags.version === true || command[0] === "version") {
++    if (
++      Object.keys(flags).some((key) => key !== "version") ||
++      (command.length > 0 && (command.length !== 1 || command[0] !== "version"))
++    )
++      throw new ValidationError("usage: pmgr --version (or: pmgr version)");
++    const metadata = JSON.parse(
++      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
++    ) as { version: string };
++    write(`${metadata.version}\n`);
++    return;
++  }
+   const action = validateInvocation(command, flags);
+   const db = openLedger();
+   const json = flags.json === true;
+diff --git a/test/core.test.ts b/test/core.test.ts
+index 47aff16..3015878 100644
+--- a/test/core.test.ts
++++ b/test/core.test.ts
+@@ -659,7 +659,7 @@ test("CLI supports add, import, reads, errors, project metadata, and export form
+   );
+   assert.throws(() => execute(["status", "import"]), ValidationError);
+   assert.throws(() => execute(["wat"]), ValidationError);
+-  assert.throws(() => execute([]), ValidationError);
++  assert.match(execute([]), /Usage: pmgr/);
+   assert.throws(() => execute(["status"]), ValidationError);
+   assert.throws(() => execute(["status", "wat"]), ValidationError);
+   assert.throws(() => execute(["status", "toString"]), ValidationError);
+
+NEW FILE test/cli-help.test.ts
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { run } from "../src/cli.js";
+
+const execute = (args: string[]) => {
+  let output = "";
+  run(args, (text) => {
+    output += text;
+  });
+  return output;
+};
+
+test("help and version do not open the ledger; aliases and command help work", () => {
+  const previous = process.env.PMGR_DB_PATH;
+  const dir = mkdtempSync(join(tmpdir(), "pmgr-help-"));
+  const db = join(dir, "not-created", "ledger.sqlite");
+  process.env.PMGR_DB_PATH = db;
+  try {
+    for (const args of [[], ["-h"], ["--help"], ["help"]]) {
+      assert.match(execute(args), /Usage: pmgr <command>/);
+      assert.match(execute(args), /PMGR_DB_PATH/);
+    }
+    for (const action of [
+      "add",
+      "complete",
+      "revoke-completion",
+      "import",
+      "current",
+      "projects",
+      "list",
+      "set-project",
+      "history",
+      "at",
+      "export",
+      "serve",
+    ]) {
+      const output = execute([action, "--help"]);
+      assert.match(output, new RegExp(`Usage: pmgr ${action} `));
+      assert.equal(execute(["help", action]), output);
+      assert.equal(execute(["status", action, "-h"]), output);
+      assert.equal(execute(["-h", action]), output);
+    }
+    assert.match(execute(["add", "-h"]), /--completes <value> \(repeatable\)/);
+    const { version } = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    for (const option of ["-v", "-V", "--version", "version"]) {
+      assert.equal(execute([option]), `${version}\n`);
+    }
+    for (const args of [
+      ["help", "wat"],
+      ["help", "toString"],
+      ["help", "add", "extra"],
+      ["--help", "--json"],
+      ["add", "--help", "--typo", "x"],
+      ["current", "--version"],
+      ["version", "extra"],
+      ["version", "--json"],
+      ["-h", "--help"],
+      ["-v", "--version"],
+    ]) {
+      assert.throws(() => execute(args));
+    }
+    assert.equal(existsSync(db), false);
+    // A path that cannot be opened also proves these calls do not initialize SQLite.
+    process.env.PMGR_DB_PATH = dir;
+    assert.match(execute(["-h"]), /Usage:/);
+    assert.equal(execute(["-v"]), `${version}\n`);
+    for (const args of [["-h"], ["-v"], ["serve", "-h"]]) {
+      const child = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "src/cli.ts", ...args],
+        { encoding: "utf8", env: process.env },
+      );
+      assert.equal(child.status, 0, child.stderr);
+      assert.equal(child.stderr, "");
+      assert.ok(child.stdout.length > 0);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.PMGR_DB_PATH;
+    else process.env.PMGR_DB_PATH = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

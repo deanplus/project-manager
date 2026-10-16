@@ -7,7 +7,7 @@ description: Manage project status with the local-first project-mgr CLI. Use whe
 
 ## CLI selection
 
-Prefer an installed `pmgr`: locate it with `command -v pmgr` and check the installed package metadata/documentation for the required version and capabilities. The current CLI does not implement `--help` or `--version`; do not use those flags as health checks. In a source checkout, use `pnpm pmgr` only when the local dependencies are already installed and the package manager is available without downloading it.
+Prefer an installed `pmgr`: locate it with `command -v pmgr` and check the installed package metadata/documentation for the required version and capabilities. This source revision supports `-h` / `--help`, `help [command]`, and `-v` / `-V` / `--version` / `version` without opening the database. Older installed releases may not support these flags; inspect their package metadata instead. In a source checkout, use `pnpm pmgr` only when the local dependencies are already installed and the package manager is available without downloading it.
 
 Do not automatically install or upgrade dependencies, or fall back to `npx` / `npm exec`. If no usable CLI is available, report the missing executable, dependency, or capability and the setup needed. Perform installation or upgrades only when the user authorizes that setup.
 

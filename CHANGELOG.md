@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2 - 2026-10-16
+
+- Add general and per-command CLI help, no-argument help, and package version aliases without opening the database.
+
 ## 0.3.1 - 2026-10-16
 
 ### Changed

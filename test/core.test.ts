@@ -659,7 +659,7 @@ test("CLI supports add, import, reads, errors, project metadata, and export form
   );
   assert.throws(() => execute(["status", "import"]), ValidationError);
   assert.throws(() => execute(["wat"]), ValidationError);
-  assert.throws(() => execute([]), ValidationError);
+  assert.match(execute([]), /Usage: pmgr/);
   assert.throws(() => execute(["status"]), ValidationError);
   assert.throws(() => execute(["status", "wat"]), ValidationError);
   assert.throws(() => execute(["status", "toString"]), ValidationError);

@@ -127,6 +127,20 @@ Delete `/tmp/project-mgr-manual-test.sqlite` when it is no longer needed.
 
 Automated tests use an in-memory database or SQLite files in the system temporary directory; they do not read or write the default database. `PMGR_DB_PATH=:memory:` also works for one command, but each CLI command runs in a separate process and its data disappears when the command exits, so it is not suitable for consecutive manual tests.
 
+## CLI help and version
+
+```bash
+pmgr                    # Show general help
+pmgr -h                 # Also: --help or help
+pmgr add --help          # Command usage and available options
+pmgr help history       # Equivalent to history -h
+pmgr -v                 # Also: -V, --version, or version
+```
+
+Help and version commands exit successfully without opening or creating a database.
+Version output comes from the installed package metadata. The compatible
+`pmgr status <command> --help` form is also supported.
+
 ## Quick start
 
 Append a project status:

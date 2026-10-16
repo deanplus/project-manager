@@ -1,0 +1,64 @@
+**Reviewer:** Claude Code, Sonnet 5.5 (`claude-sonnet-5-5`). Effort level: unknown, not verified.
+**Status:** complete (static review). No dynamic tests were run.
+
+## Scope and verification
+- I read the full diff for `src/cli.ts`, `test/core.test.ts`, `README.md`, `CHANGELOG.md` and `skills/project-mgr/SKILL.md`.
+- I read all of the new `test/cli-help.test.ts`, plus `src/cli.ts` lines 1–130 and 190–529.
+- I also checked `package.json` (`bin`, `files`, `scripts`), `tsconfig.json` (`rootDir` `src`, `outDir` `dist`) and `eslint.config.js`, and searched for other mentions of `--help` and `--version`.
+- I did not run tests, typecheck, lint, coverage, or the CLI. The coder is running those separately. I did not read `docs/reviews/evidence/`.
+
+## Verdict
+I found no blocking or functional defects. Help and version are handled in `run()` (`src/cli.ts:312-337`) before `openLedger()` (`src/cli.ts:339`), so they never touch the database. Existing actions go through the unchanged `validateInvocation` and switch path.
+
+## Findings
+
+1. **Low, documentation gap: `README_CN.md` was not updated.**
+   - **Trigger:** a user reads the Chinese README, which ships in the npm package (`package.json` `files`).
+   - **Impact:** it has no mention of `-h`, `--help`, `-v` or `--version`, so the two READMEs now disagree. `README_CN.md` already existed and is not a new non-English artifact. If it is meant to mirror `README.md`, it needs the new section.
+   - **Evidence:** a grep of `README_CN.md` for these flags found nothing. The new section is at `README.md:130-142` only.
+   - **Fix:** add a matching Chinese section. Or, if the Chinese README is deliberately not kept in sync, record that decision.
+
+2. **Low, boundary behavior: bare `pmgr status --help` and `pmgr -h status` fail.**
+   - **Trigger:** `pmgr status --help` or `pmgr -h status`.
+   - **Impact:** both exit 1 with the long usage error instead of help. The general help advertises `pmgr status <command> [options]` (`src/cli.ts:~163-164`). The README only promises `status <command> --help`, so this is not a contract violation. It is a mild surprise.
+   - **Evidence:**
+     - At `src/cli.ts:317-322`, `command` is `["status"]`, so `validateInvocation` runs.
+     - At `src/cli.ts:196-203`, `action` is `undefined`, so it throws.
+     - The same happens for `pmgr help help` (the `help` token is shifted off once, leaving `["help"]`) and for `pmgr help status`.
+   - **Fix (optional):** if `command` is `["status"]` or `["help"]` with no flags, print general help. Otherwise keep the current behavior and accept it.
+
+3. **Info, behavior change: bare `pmgr` now prints help and exits 0.**
+   - Before this change it threw `ValidationError` and exited 1.
+   - The existing assertion at `test/core.test.ts:662` was updated to match, and the CHANGELOG records it.
+   - Any script that relied on `pmgr` with no arguments failing will now see success. This fits the requested "no-argument help" and is conventional, so I do not consider it a defect.
+
+4. **Info, global short-flag aliasing.**
+   - `parse` rewrites any bare `-h`, `-v` or `-V` token to `--help` or `--version` (`src/cli.ts:40-46`).
+   - A positional argument with one of those literal names, such as an import file called `-v`, can no longer be passed. The real risk is negligible, and `./-v` or `--file -v` is a workaround. Note that `--file -v` does not work, because the value is read raw from `argv` (`src/cli.ts:58`) and `-v` is accepted. So only the positional form is affected.
+   - A value of `-h` after a value-taking flag, as in `--summary -h`, is consumed raw and stays a literal value. This is unchanged and fine.
+
+5. **Info, cosmetic: README example comments are unevenly aligned.**
+   - At `README.md:132-136` the `pmgr add --help` line has a different comment column from the others.
+
+## Checked, no issue found
+- **Version lookup:** `new URL("../package.json", import.meta.url)` resolves to the repo root from both `src/cli.ts` and `dist/cli.js`. `package.json` is always packed by npm. Node resolves symlinked ESM entry points to the real path, and the entry glue already uses `realpathSync`.
+- **Version error cases:** the combinations `-v add`, `version extra`, `version --json`, `current --version` and `-v --version` all throw. `version --version` prints the version. The error message is accurate.
+- **Help validation:** help for a command runs `validateInvocation`, so typos, extra positional arguments and unknown flags still error. Examples are `add --help --typo x`, `help add extra` and `help toString`.
+- **Help tables:** `commandHelp` keys match `allowedFlags` keys exactly (12 each), so `commandHelp[action]` and `allowedFlags.get(action)!` cannot be undefined after validation. `__proto__`-style names are rejected by `allowedFlags.get`.
+- **Flags and aliases:**
+  - `--help` and `--version` are added to `booleanFlags`, so `--help` and `-h` together are rejected as a duplicate.
+  - They are deleted or handled before the allowed-flag check, so they do not leak into command validation.
+  - `serve --help` returns before `startServer`, so no server starts.
+- **Lint and coverage:** the repo's only lint rule is `no-unused-vars`, so the `!` assertion is fine. By inspection every new branch is hit by `cli-help.test.ts`, so the 100% c8 gate should hold. The child-process spawns sit behind the `c8 ignore` entry glue. This is unverified at runtime.
+- **Test design:**
+  - A non-existent parent directory plus the `existsSync(db) === false` check, and a `PMGR_DB_PATH` set to a directory, is a sound proof that help and version do not open the database.
+  - The env var is restored in `finally` and the temp directory is removed.
+  - The spawn tests use a relative `src/cli.ts`, so they depend on running from the repo root, which `pnpm test` does.
+- **Skill and changelog:** the SKILL.md statement is accurate and appropriately hedges older releases. The CHANGELOG entry sits under an Unreleased heading, as it should. No stale "does not implement --help" text remains. Everything is in English.
+
+## Unverifiable here
+- That the test suite, typecheck, lint, format-check and 100% coverage actually pass. Please rely on the coder's run.
+- Real exit codes and stderr from the built `dist/cli.js` binary. I only inferred them from the source and the test's `spawnSync` expectations.
+
+## Unrelated, preexisting
+- `export --format jsonl` emits the same single-line JSON as `json` (`src/cli.ts:481-488`, with an explanatory comment). The new help text, "Export a portable ledger … `[--format json|jsonl]`", does not misstate this.

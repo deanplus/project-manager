@@ -1,0 +1,6 @@
+CLI: Claude Code 2.1.292
+Model from init event: claude-sonnet-5-5
+Effort requested: high; actual effort not independently exposed
+Exit code: 0
+Review mode: read-only static inspection
+System events reduced to non-account execution metadata.

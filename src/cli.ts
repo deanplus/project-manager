@@ -22,25 +22,34 @@ import {
 } from "./index.js";
 
 type Flags = Record<string, string | string[] | boolean>;
+const booleanFlags = new Set([
+  "json",
+  "clear-description",
+  "clear-notes",
+  "open",
+  "no-open",
+  "help",
+  "version",
+]);
 const repeats = new Set(["next", "blocker", "decision", "tag", "completes"]);
 
 function parse(argv: string[]): { command: string[]; flags: Flags } {
   const command: string[] = [];
   const flags: Flags = Object.create(null) as Flags;
   for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
+    const raw = argv[index];
+    const token =
+      raw === "-h"
+        ? "--help"
+        : raw === "-v" || raw === "-V"
+          ? "--version"
+          : raw;
     if (!token.startsWith("--")) {
       command.push(token);
       continue;
     }
     const key = token.slice(2);
-    if (
-      key === "json" ||
-      key === "clear-description" ||
-      key === "clear-notes" ||
-      key === "open" ||
-      key === "no-open"
-    ) {
+    if (booleanFlags.has(key)) {
       if (flags[key] !== undefined)
         throw new ValidationError(`--${key} may only be supplied once`);
       flags[key] = true;
@@ -105,6 +114,83 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
   ["export", new Set(["project", "format"])],
   ["serve", new Set(["port", "host", "open", "no-open", "json"])],
 ]);
+
+const commandHelp: Record<string, [string, string]> = {
+  add: [
+    "Append a status snapshot",
+    "--project <name> --summary <text> [options]",
+  ],
+  complete: [
+    "Link a completed activity to its follow-up",
+    "--entry <id-or-uid> --by <id-or-uid> [options]",
+  ],
+  "revoke-completion": [
+    "Revoke an activity completion link",
+    "--entry <id-or-uid> --by <id-or-uid> [options]",
+  ],
+  import: [
+    "Import a JSON or JSONL ledger",
+    "<file> [--json] | --file <path> [--json]",
+  ],
+  current: [
+    "Show the latest status of each project",
+    "[--project <name>] [--json]",
+  ],
+  projects: ["List or search projects", "[--query <text>] [--json]"],
+  list: ["Alias for projects", "[--query <text>] [--json]"],
+  "set-project": ["Update project metadata", "--project <name> [options]"],
+  history: [
+    "Show status history, newest first",
+    "[--project <name>] [options]",
+  ],
+  at: [
+    "Show a project's status at a time",
+    "--project <name> --at <ISO-timestamp> [--json]",
+  ],
+  export: [
+    "Export a portable ledger",
+    "[--project <name>] [--format json|jsonl]",
+  ],
+  serve: [
+    "Start the local web dashboard",
+    "[--port <number>] [--host <address>] [--no-open] [--json]",
+  ],
+};
+
+function help(action?: string): string {
+  if (action) {
+    const [description, usage] = commandHelp[action];
+    const options = [...allowedFlags.get(action)!].map(
+      (key) =>
+        `  --${key}${booleanFlags.has(key) ? "" : " <value>"}${repeats.has(key) ? " (repeatable)" : ""}`,
+    );
+    return `Usage: pmgr ${action} ${usage}\n\n${description}\n\nOptions:\n${options.join("\n")}\n  -h, --help  Show this help\n`;
+  }
+  return `Usage: pmgr <command> [options]
+       pmgr status <command> [options]
+
+Local-first, append-only project status ledger.
+
+Commands:
+${Object.entries(commandHelp)
+  .map(([name, [description]]) => `  ${name.padEnd(20)}${description}`)
+  .join("\n")}
+  help [command]      Show general or command help
+  version             Show the installed package version
+
+Options:
+  -h, --help          Show help (also supported after a command)
+  -v, -V, --version   Show the installed package version
+
+Environment:
+  PMGR_DB_PATH        SQLite path (default: ~/.local/share/project-mgr/project-mgr.sqlite)
+
+Examples:
+  pmgr current --json
+  pmgr add --project demo --status active --summary "Work started"
+  pmgr help history
+`;
+}
 
 function validateInvocation(command: string[], flags: Flags): string {
   const statusCommand = command[0] === "status";
@@ -224,6 +310,31 @@ export function run(
   write = process.stdout.write.bind(process.stdout),
 ): unknown {
   const { command, flags } = parse(argv);
+  if (command[0] === "help") {
+    command.shift();
+    flags.help = true;
+  }
+  if (argv.length === 0 || flags.help === true) {
+    delete flags.help;
+    const action =
+      command.length || Object.keys(flags).length
+        ? validateInvocation(command, flags)
+        : undefined;
+    write(help(action));
+    return;
+  }
+  if (flags.version === true || command[0] === "version") {
+    if (
+      Object.keys(flags).some((key) => key !== "version") ||
+      (command.length > 0 && (command.length !== 1 || command[0] !== "version"))
+    )
+      throw new ValidationError("usage: pmgr --version (or: pmgr version)");
+    const metadata = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { version: string };
+    write(`${metadata.version}\n`);
+    return;
+  }
   const action = validateInvocation(command, flags);
   const db = openLedger();
   const json = flags.json === true;
