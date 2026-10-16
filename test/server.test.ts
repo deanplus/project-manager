@@ -86,6 +86,8 @@ test("server handles Web UI and REST API request routing", () => {
   const rootRes = simulateRequest(db, "GET", "", "customhost:8080");
   assert.equal(rootRes.statusCode, 200);
   assert.equal(rootRes.headers["Content-Type"], "text/html; charset=utf-8");
+  assert.ok(rootRes.body.includes('<html lang="zh-CN">'));
+  assert.ok(rootRes.body.includes('data-i18n="appTitle">项目管理</h1>'));
   assert.ok(rootRes.body.includes("Project Manager"));
 
   // Test GET /index.html
@@ -347,8 +349,271 @@ test("CLI serve command supports port, host, no-open, and json output", async ()
   rmSync(directory, { recursive: true, force: true });
 });
 
-test("getWebUIHTML returns HTML string", () => {
+test("getWebUIHTML defaults to Chinese and supports zh/en i18n switching", async () => {
   const html = getWebUIHTML();
   assert.ok(typeof html === "string");
   assert.ok(html.includes("<!DOCTYPE html>"));
+  assert.ok(html.includes('<html lang="zh-CN">'));
+  assert.ok(html.includes("<title>项目管理 - 项目与动态概览</title>"));
+  assert.ok(html.includes('id="appTitle" data-i18n="appTitle">项目管理</h1>'));
+
+  const enHtml = getWebUIHTML("en");
+  assert.ok(enHtml.includes('<html lang="en">'));
+  assert.ok(
+    enHtml.includes(
+      "<title>Project Manager - Projects & Activity Feed</title>",
+    ),
+  );
+  assert.ok(
+    enHtml.includes('id="appTitle" data-i18n="appTitle">Project Manager</h1>'),
+  );
+
+  const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+  assert.ok(scriptMatch, "expected inline script in Web UI HTML");
+
+  const dataI18nKeys = [
+    ...html.matchAll(/data-i18n(?:-placeholder)?="([^"]+)"/g),
+  ].map((m) => m[1]);
+  assert.ok(dataI18nKeys.length > 0);
+
+  const elements = new Map<
+    string,
+    {
+      textContent: string;
+      innerHTML: string;
+      value: string;
+      placeholder: string;
+      style: { display: string };
+      active: boolean;
+      dataset: Record<string, string>;
+      attrs: Record<string, string>;
+      setAttribute: (k: string, v: string) => void;
+      classList: { toggle: (cls: string, force?: boolean) => void };
+      addEventListener: () => void;
+    }
+  >();
+  const getElement = (id: string) => {
+    let el = elements.get(id);
+    if (!el) {
+      const attrs: Record<string, string> = {};
+      el = {
+        textContent: "",
+        innerHTML: "",
+        value: "",
+        placeholder: "",
+        style: { display: "" },
+        active: false,
+        dataset: {},
+        attrs,
+        setAttribute: (k: string, v: string) => {
+          attrs[k] = v;
+        },
+        classList: {
+          toggle: (_cls: string, force?: boolean) => {
+            if (el) el.active = Boolean(force);
+          },
+        },
+        addEventListener: () => {},
+      };
+      elements.set(id, el);
+    }
+    return el;
+  };
+  getElement("appTitle").dataset.i18n = "appTitle";
+  getElement("tabProjects").dataset.i18n = "projects";
+  getElement("tabActivity").dataset.i18n = "activityFeed";
+  getElement("searchInput").dataset.i18nPlaceholder = "searchPlaceholder";
+
+  const storage = new Map<string, string>();
+  const { runInNewContext } = await import("node:vm");
+  const context: Record<string, unknown> = {
+    localStorage: {
+      getItem: (k: string) => storage.get(k) ?? null,
+      setItem: (k: string, v: string) => storage.set(k, v),
+    },
+    document: {
+      documentElement: { lang: "zh-CN" },
+      title: "",
+      getElementById: getElement,
+      querySelectorAll: (sel: string) => {
+        if (sel === "[data-i18n]") {
+          return [
+            getElement("appTitle"),
+            getElement("tabProjects"),
+            getElement("tabActivity"),
+          ];
+        }
+        if (sel === "[data-i18n-placeholder]") {
+          return [getElement("searchInput")];
+        }
+        return [];
+      },
+      addEventListener: () => {},
+    },
+    fetch: async (url: string) => {
+      if (url === "/api/projects") {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              project: "alpha",
+              displayName: "Alpha",
+              createdAt: "2026-08-07T00:00:00.000Z",
+              latestStatus: {
+                status: "active",
+                summary: "Working",
+                occurredAt: "2026-08-07T00:00:00.000Z",
+              },
+            },
+          ],
+        };
+      }
+      if (url.startsWith("/api/history")) {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              project: "alpha",
+              status: "active",
+              source: "agent",
+              summary: "Working",
+              progress: "Step 1",
+              blockers: ["B1"],
+              nextSteps: ["N1"],
+              decisions: ["D1"],
+              tags: ["t1"],
+              occurredAt: "2026-08-07T00:00:00.000Z",
+            },
+            {
+              project: "alpha",
+              status: "completed",
+              source: "human",
+              summary: "Second entry",
+              tags: [],
+              occurredAt: "2026-08-07T01:00:00.000Z",
+            },
+          ],
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          totalProjects: 1,
+          totalEntries: 2,
+          statusCounts: { active: 1 },
+        }),
+      };
+    },
+    console,
+    Date,
+    String,
+  };
+
+  runInNewContext(scriptMatch[1], context);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // Verify default language is Chinese (zh) and initial date filter empty state
+  assert.equal(
+    (context.document as { documentElement: { lang: string } }).documentElement
+      .lang,
+    "zh-CN",
+  );
+  assert.equal(getElement("appTitle").textContent, "项目管理");
+  assert.equal(getElement("tabProjects").textContent, "项目列表");
+  assert.equal(getElement("tabActivity").textContent, "动态流");
+  assert.equal(getElement("btnLangZh").active, true);
+  assert.equal(getElement("btnLangEn").active, false);
+  assert.equal(getElement("langSwitch").attrs["aria-label"], "切换语言");
+  assert.ok(getElement("projectsContainer").innerHTML.includes("进行中"));
+  assert.ok(getElement("projectsContainer").innerHTML.includes("查看动态 →"));
+  assert.ok(getElement("timelineContainer").innerHTML.includes("暂无动态记录"));
+
+  // Search by localized status text ("进行中")
+  getElement("searchInput").value = "进行中";
+  (context.render as () => void)();
+  assert.ok(getElement("projectsContainer").innerHTML.includes("Alpha"));
+  getElement("searchInput").value = "";
+
+  // Clear date filter so timeline items render and verify Chinese timeline labels
+  (context.clearActivityDate as () => void)();
+  assert.ok(getElement("timelineContainer").innerHTML.includes("2 条动态"));
+  assert.ok(getElement("timelineContainer").innerHTML.includes("⛔ 阻塞项"));
+  assert.ok(getElement("timelineContainer").innerHTML.includes("🎯 下一步"));
+  assert.ok(getElement("timelineContainer").innerHTML.includes("💡 决策"));
+
+  for (const key of dataI18nKeys) {
+    assert.notEqual((context.t as (k: string) => string)(key), key);
+  }
+
+  // Switch to English via setLang('en') and ignore invalid locale
+  (context.setLang as (lang: string) => void)("invalid");
+  assert.equal(getElement("appTitle").textContent, "项目管理");
+  (context.setLang as (lang: string) => void)("en");
+  for (const key of dataI18nKeys) {
+    assert.notEqual((context.t as (k: string) => string)(key), key);
+  }
+  assert.equal(storage.get("pmgr_lang"), "en");
+  assert.equal(
+    (context.document as { documentElement: { lang: string } }).documentElement
+      .lang,
+    "en",
+  );
+  assert.equal(getElement("appTitle").textContent, "Project Manager");
+  assert.equal(getElement("tabProjects").textContent, "Projects");
+  assert.equal(getElement("tabActivity").textContent, "Activity Feed");
+  assert.equal(
+    getElement("searchInput").placeholder,
+    "Search projects, status, or activity...",
+  );
+  assert.equal(
+    getElement("langSwitch").attrs["aria-label"],
+    "Language Switcher",
+  );
+  assert.equal(getElement("btnLangZh").active, false);
+  assert.equal(getElement("btnLangEn").active, true);
+  assert.ok(
+    getElement("projectsContainer").innerHTML.includes("View Activity →"),
+  );
+  assert.ok(getElement("timelineContainer").innerHTML.includes("2 updates"));
+  assert.ok(getElement("timelineContainer").innerHTML.includes("⛔ Blockers"));
+  assert.ok(
+    getElement("timelineContainer").innerHTML.includes("🎯 Next Steps"),
+  );
+  assert.ok(getElement("timelineContainer").innerHTML.includes("💡 Decisions"));
+
+  // Unknown enum fallback returns raw value instead of dictionary key
+  assert.equal(
+    (context.formatStatus as (s: string) => string)("custom"),
+    "custom",
+  );
+  assert.equal(
+    (context.formatSource as (s: string) => string)("webhook"),
+    "webhook",
+  );
+
+  // Switch back to Chinese via setLang('zh')
+  (context.setLang as (lang: string) => void)("zh");
+  assert.equal(storage.get("pmgr_lang"), "zh");
+  assert.equal(getElement("appTitle").textContent, "项目管理");
+  assert.equal(getElement("btnLangZh").active, true);
+  assert.equal(getElement("btnLangEn").active, false);
+
+  // Verify pre-seeded localStorage ("en") and throwing localStorage fallback
+  storage.set("pmgr_lang", "en");
+  runInNewContext(scriptMatch[1], { ...context });
+  assert.equal(getElement("appTitle").textContent, "Project Manager");
+
+  const throwingContext = {
+    ...context,
+    localStorage: {
+      getItem: () => {
+        throw new Error("disabled");
+      },
+      setItem: () => {
+        throw new Error("disabled");
+      },
+    },
+  };
+  runInNewContext(scriptMatch[1], throwingContext);
+  assert.equal(getElement("appTitle").textContent, "项目管理");
 });
