@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 - 2026-10-16
+
+### Changed
+
+- Prefer an installed `pmgr` in the Skill and remove automatic `npx @latest` execution from examples.
+- Require explicit status values and evidence-backed historical backfills without a minimum entry count.
+- Document database permission handling, stable ledger paths, and read-back verification after writes.
+
+This release updates Skill guidance only; CLI behavior and storage architecture are unchanged.
+
 ## 0.3.0 - 2026-10-16
 
 ### Added

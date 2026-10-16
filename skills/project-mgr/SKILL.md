@@ -5,7 +5,11 @@ description: Manage project status with the local-first project-mgr CLI. Use whe
 
 # project-mgr
 
-Use `npx --yes --package project-mgr@latest pmgr`. In a source checkout, use `pnpm pmgr` instead.
+## CLI selection
+
+Prefer an installed `pmgr`: locate it with `command -v pmgr` and check the installed package metadata/documentation for the required version and capabilities. The current CLI does not implement `--help` or `--version`; do not use those flags as health checks. In a source checkout, use `pnpm pmgr` only when the local dependencies are already installed and the package manager is available without downloading it.
+
+Do not automatically install or upgrade dependencies, or fall back to `npx` / `npm exec`. If no usable CLI is available, report the missing executable, dependency, or capability and the setup needed. Perform installation or upgrades only when the user authorizes that setup.
 
 Completion links and version-2 exports require project-mgr 0.3.0 or later. This skill is updated through Git and has no independent release version.
 
@@ -13,9 +17,12 @@ Completion links and version-2 exports require project-mgr 0.3.0 or later. This 
 
 - Read `PMGR_DB_PATH` before operating. If unset, the CLI uses `~/.local/share/project-mgr/project-mgr.sqlite`.
 - For exploratory or test work, set `PMGR_DB_PATH` to a dedicated absolute SQLite path for every command. Do not use `:memory:` when more than one CLI invocation must share data.
-- Query before writing. `add` appends a snapshot; it does not edit the previous one.
+- The database file and its parent directory must be accessible with the permissions SQLite needs for journal files and writes. Even query commands open the ledger and may initialize or migrate it; do not assume they are filesystem-read-only.
+- On a permission or read-only database error, report the command, resolved database path, and error without exposing credentials. Use the environment's approved permission mechanism when available; otherwise report the blocked operation. Do not reinstall the CLI, change permissions, or silently switch to another database to work around the error. Change the ledger location only when the user requests it.
+- Query before writing. `add` appends a snapshot; it does not edit the previous one. Read back the affected state after writing and report success only when verified. If a write's outcome is uncertain, query before retrying to avoid duplicates.
 - Set `--source agent` for agent-authored updates. Use `--external-ref` only when a stable idempotency key is available.
-- If the project is not yet in the ledger database, initialize its metadata with `set-project`, backfill 3–5 historical major changes/milestones using `add` (setting appropriate historical `--at` timestamps), and then append the latest status snapshot.
+- Explicitly pass `--status` on every `add`, and include `status` in every agent-authored import entry. The CLI defaults to `completed`; do not rely on that default. Choose the status from the evidence and inspect the current snapshot when unclear. Completing one activity does not necessarily complete the project; use `active` when project work continues. If the status remains uncertain, clarify before writing.
+- If the project is not yet in the ledger database, initialize its metadata with `set-project`. Backfill only milestones supported by verifiable Git commits, dated documents, or historical records, and include the evidence reference in `--progress`. Use historical `--at` timestamps only when supported by that evidence; a commit timestamp proves a commit, not a deployment. There is no required number of entries. Never invent milestones or dates; when evidence is unavailable, skip backfill and append only the current known status.
 
 ## Metadata vs. status entries
 
@@ -32,32 +39,32 @@ Prefer `--json` for data that must be interpreted or reported programmatically.
 
 ```bash
 # Set, update, or clear project metadata (description, notes, display name).
-npx --yes --package project-mgr@latest pmgr set-project --project my-project --description "Project summary" --notes "Internal notes" --json
-npx --yes --package project-mgr@latest pmgr set-project --project my-project --clear-description --clear-notes --json
+pmgr set-project --project my-project --description "Project summary" --notes "Internal notes" --json
+pmgr set-project --project my-project --clear-description --clear-notes --json
 
 # List all projects or fuzzy search across project names, descriptions, notes, status summaries, and tags.
-npx --yes --package project-mgr@latest pmgr projects --json
-npx --yes --package project-mgr@latest pmgr list --query "keyword" --json
+pmgr projects --json
+pmgr list --query "keyword" --json
 
 # Start the local Web Dashboard & REST API server.
-npx --yes --package project-mgr@latest pmgr serve --port 3000 --no-open --json
+pmgr serve --port 3000 --no-open --json
 
-# Add an agent-authored status snapshot (status defaults to completed if omitted).
-npx --yes --package project-mgr@latest pmgr add --project my-project --summary "Implemented the CLI" \
+# Record a completed milestone while the project remains active.
+pmgr add --project my-project --status active --summary "Implemented the CLI" \
   --progress "Tests pass" --next "Publish the package" --source agent --json
 
 # Query current state, history, or state at a time.
-npx --yes --package project-mgr@latest pmgr current --project my-project --json
-npx --yes --package project-mgr@latest pmgr history --project my-project --limit 20 --json
-npx --yes --package project-mgr@latest pmgr history --limit 20 --json
-npx --yes --package project-mgr@latest pmgr at --project my-project --at 2026-08-03T12:00:00+08:00 --json
+pmgr current --project my-project --json
+pmgr history --project my-project --limit 20 --json
+pmgr history --limit 20 --json
+pmgr at --project my-project --at 2026-08-03T12:00:00+08:00 --json
 
 # Import validated JSON/JSONL, or export portable records.
-npx --yes --package project-mgr@latest pmgr import statuses.jsonl --json
-npx --yes --package project-mgr@latest pmgr export --project my-project --format jsonl > statuses.jsonl
+pmgr import statuses.jsonl --json
+pmgr export --project my-project --format jsonl > statuses.jsonl
 ```
 
-Use `PMGR_DB_PATH=/absolute/path/test.sqlite npx --yes --package project-mgr@latest pmgr ...` to isolate a manual test database. Import validates and writes the entire batch within one transaction; export output can be imported directly.
+Use `PMGR_DB_PATH=/absolute/path/test.sqlite pmgr ...` to isolate a manual test database. Import validates and writes the entire batch within one transaction; export output can be imported directly.
 
 ## Complete predecessor activities
 
