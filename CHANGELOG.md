@@ -1,11 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-10-28
+
+### Added
 
 - Add independent Todos with optional project/source links, per-item completion, cancellation, reopening, and CLI commands.
 - Create Todos atomically from new next steps and explicitly convert legacy steps without rewriting history.
 - Add dashboard activity completion controls and project-filtered Todo views.
 - Preserve Todo state in version-3 exports and enforce same-origin local JSON writes.
+
+### Changed
+
+- Guide agents to ask before recording multiple sub-projects, either under one project name or with snapshot tags.
+- Sync the Chinese README with CLI help, activity completion, and Todo documentation.
 
 ## 0.3.2 - 2026-10-16
 
