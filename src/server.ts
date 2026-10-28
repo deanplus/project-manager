@@ -8,12 +8,18 @@ import {
 import { URL } from "node:url";
 import {
   countEntries,
+  createTodo,
+  listTodos,
+  updateTodo,
+  convertNextStep,
+  completeActivity,
   getEntry,
   history,
   listProjects,
   openLedger,
   type Ledger,
 } from "./db.js";
+import { ValidationError } from "./domain.js";
 import { getWebUIHTML } from "./web/ui.js";
 
 export type ServerOptions = {
@@ -71,6 +77,15 @@ export function handleRequest(
   res: ServerResponse,
   db: Ledger,
 ): void {
+  if (
+    req.method === "POST" &&
+    /^\/api\/(todos(?:\/[^/]+)?|entries\/[^/]+\/(complete|todos))$/.test(
+      (req.url || "").split("?")[0],
+    )
+  ) {
+    void handleMutation(req, res, db);
+    return;
+  }
   if (req.method !== "GET" && req.method !== "HEAD") {
     sendJson(res, 405, { error: "Method not allowed" });
     return;
@@ -103,6 +118,10 @@ export function handleRequest(
     return;
   }
 
+  if (pathname === "/api/todos") {
+    sendJson(res, 200, listTodos(db, query.project));
+    return;
+  }
   if (pathname === "/api/projects") {
     const projects = listProjects(db, { query: query.query });
     sendJson(res, 200, projects);
@@ -217,4 +236,80 @@ export function startServer(
       });
     });
   });
+}
+
+async function handleMutation(
+  req: IncomingMessage,
+  res: ServerResponse,
+  db: Ledger,
+): Promise<void> {
+  try {
+    const host = req.headers.host;
+    if (
+      !host ||
+      !/^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(host) ||
+      (req.headers.origin !== undefined &&
+        req.headers.origin !== `http://${host}`) ||
+      (req.headers["sec-fetch-site"] !== undefined &&
+        !["same-origin", "none"].includes(
+          String(req.headers["sec-fetch-site"]),
+        ))
+    ) {
+      sendJson(res, 403, {
+        error: "Only same-origin local writes are allowed",
+      });
+      return;
+    }
+    if (req.headers["content-type"] !== "application/json") {
+      sendJson(res, 415, { error: "JSON required" });
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+      const bytes = Buffer.from(chunk);
+      size += bytes.length;
+      if (size > 32768) {
+        sendJson(res, 413, { error: "Request too large" });
+        return;
+      }
+      chunks.push(bytes);
+    }
+    const input: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const parts = new URL(req.url!, `http://${host}`).pathname
+      .split("/")
+      .map(decodeURIComponent);
+    let result: unknown;
+    if (parts[2] === "todos")
+      result = parts[3]
+        ? updateTodo(db, parts[3], input)
+        : createTodo(db, input);
+    else {
+      if (!input || typeof input !== "object" || Array.isArray(input))
+        throw new ValidationError("expected an object");
+      const data = input as Record<string, unknown>;
+      if (parts[4] === "complete") {
+        if (Object.keys(data).length)
+          throw new ValidationError("unexpected fields");
+        result = completeActivity(db, parts[3]);
+      } else if (Object.keys(data).length === 1 && "index" in data)
+        result = convertNextStep(db, parts[3], data.index as number);
+      else {
+        if (Object.keys(data).some((key) => key !== "title"))
+          throw new ValidationError("unexpected fields");
+        result = createTodo(db, { title: data.title, entryUid: parts[3] });
+      }
+    }
+    sendJson(res, 200, result);
+  } catch (error) {
+    sendJson(
+      res,
+      error instanceof ValidationError ||
+        error instanceof SyntaxError ||
+        error instanceof URIError
+        ? 400
+        : 500,
+      { error: error instanceof Error ? error.message : "Request failed" },
+    );
+  }
 }

@@ -1,0 +1,12 @@
+[
+  {
+    "type": "result",
+    "session_id": "C2B04266-7C33-447B-9ED2-A5329AA3CB7F",
+    "is_error": true,
+    "result": "You've hit your weekly limit \u00b7 resets Oct 28 at 12pm (Asia/Shanghai)",
+    "api_error": "usage_limit_reached",
+    "api_error_status": 429,
+    "duration_ms": 670,
+    "subtype": "success"
+  }
+]

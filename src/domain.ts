@@ -39,6 +39,7 @@ export type StatusEntryInput = {
   progress?: string;
   blockers?: string[];
   nextSteps?: string[];
+  nextStepsSourceUid?: string;
   decisions?: string[];
   tags?: string[];
   occurredAt?: string;
@@ -47,8 +48,9 @@ export type StatusEntryInput = {
 };
 
 export type StatusEntry = Required<
-  Omit<StatusEntryInput, "progress" | "externalRef">
+  Omit<StatusEntryInput, "progress" | "externalRef" | "nextStepsSourceUid">
 > & {
+  nextStepsSourceUid?: string;
   id: number;
   progress?: string;
   externalRef?: string;
@@ -77,6 +79,7 @@ const keys = new Set([
   "progress",
   "blockers",
   "nextSteps",
+  "nextStepsSourceUid",
   "decisions",
   "tags",
   "occurredAt",
@@ -212,6 +215,9 @@ export function validateStatusEntry(
     progress: text(input.progress, "progress"),
     blockers: textList(input.blockers, "blockers"),
     nextSteps: textList(input.nextSteps, "nextSteps"),
+    ...(input.nextStepsSourceUid === undefined
+      ? {}
+      : { nextStepsSourceUid: validateUid(input.nextStepsSourceUid) }),
     decisions: textList(input.decisions, "decisions"),
     tags: textList(input.tags, "tags"),
     occurredAt:
@@ -236,6 +242,8 @@ export function toPortableStatusEntry(entry: StatusEntry): PortableStatusEntry {
     occurredAt: entry.occurredAt,
     source: entry.source,
   };
+  if (entry.nextStepsSourceUid !== undefined)
+    result.nextStepsSourceUid = entry.nextStepsSourceUid;
   if (entry.progress !== undefined) result.progress = entry.progress;
   if (entry.externalRef !== undefined) result.externalRef = entry.externalRef;
   return result;

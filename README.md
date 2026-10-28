@@ -333,3 +333,25 @@ Activity cards display Completed with a follow-up link and retain original detai
 Export now emits a version-2 bundle `{ "version": 2, "entries": [...], "completions": [...] }`. JSONL emits one complete bundle per line. Entries retain UUIDs and recording times; events retain UUIDs and per-target predecessor links, including revocations. Import accepts legacy entry objects/arrays/JSONL and version-2 bundles, checks identity conflicts, and applies each file atomically. Re-importing the same bundle is idempotent. Event order is significant: import events in exported order; divergent histories fail instead of silently merging. Older clients cannot import version-2 bundles. Migration adds UUIDs to existing snapshots without changing their content.
 
 Independently migrated copies of legacy data receive different UUIDs. Cross-import may fail on an existing `externalRef`; no implicit identity adoption occurs. Restore a bundle into a fresh database for a faithful migration. Older writers are rejected if they omit UUIDs. With an existing `externalRef`, `add` retains its existing snapshot and applies explicitly supplied `--completes` links to that snapshot; identical active links are no-ops. Use `complete` to make after-the-fact reconciliation explicit.
+
+### Todos and dashboard actions
+
+New `add --next` values create independent Todos linked to the new activity.
+Historical next steps stay as text until explicitly converted in the dashboard.
+The Todos tab supports standalone creation, optional project assignment, source
+links, completion, cancellation, and reopening. Project cards filter this list.
+Activity cards provide **Mark completed**, recording a follow-up with the current
+project status; this neither completes the project nor its Todos.
+
+```sh
+pmgr todo-add --title "Review results" --project demo --json
+pmgr todo-add --title "Unassigned idea" --json
+pmgr todos --project demo --json
+pmgr todo-update --uid <todo-uuid> --status completed --json
+```
+
+Exports with Todos use version 3 and preserve their identities and state;
+version-2 and legacy imports remain supported without creating new Todos from
+old next-step text. Conflicting Todo snapshots are rejected atomically on import.
+Dashboard writes are restricted to same-origin localhost requests with JSON bodies;
+remote-host dashboards remain read-only.

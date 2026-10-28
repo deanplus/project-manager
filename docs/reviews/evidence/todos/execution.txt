@@ -1,0 +1,6 @@
+Claude Code 2.1.292
+Requested model: sonnet; effort: high
+Actual model: unknown; provider rejected before inference
+Session: C2B04266-7C33-447B-9ED2-A5329AA3CB7F
+Exit code: 1
+Status: failed (weekly usage_limit_reached, HTTP 429)

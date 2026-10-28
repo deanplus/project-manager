@@ -1,0 +1,152 @@
+
+> project-mgr@0.3.2 test /Users/dwong/mydoc/code/projects/project-mgr
+> tsx --test test/**/*.test.ts
+
+TAP version 13
+# Subtest: help and version do not open the ledger; aliases and command help work
+ok 1 - help and version do not open the ledger; aliases and command help work
+  ---
+  duration_ms: 233.176584
+  type: 'test'
+  ...
+# Subtest: completion propagates explicitly, survives filtering, revokes, and preserves snapshots
+ok 2 - completion propagates explicitly, survives filtering, revokes, and preserves snapshots
+  ---
+  duration_ms: 10.130958
+  type: 'test'
+  ...
+# Subtest: portable bundles preserve event chains, reject identity conflicts and import atomically
+ok 3 - portable bundles preserve event chains, reject identity conflicts and import atomically
+  ---
+  duration_ms: 5.203042
+  type: 'test'
+  ...
+# Subtest: CLI completion and revocation, metadata rollback, and JSONL bundle import
+ok 4 - CLI completion and revocation, metadata rollback, and JSONL bundle import
+  ---
+  duration_ms: 12.173
+  type: 'test'
+  ...
+# Subtest: migration adds identities to legacy snapshots without changing content
+ok 5 - migration adds identities to legacy snapshots without changing content
+  ---
+  duration_ms: 9.235459
+  type: 'test'
+  ...
+# Subtest: domain normalizes valid values and rejects invalid input
+ok 6 - domain normalizes valid values and rejects invalid input
+  ---
+  duration_ms: 1.803
+  type: 'test'
+  ...
+# Subtest: SQLite ledger migrates, appends, is idempotent, and queries by timeline
+ok 7 - SQLite ledger migrates, appends, is idempotent, and queries by timeline
+  ---
+  duration_ms: 10.472625
+  type: 'test'
+  ...
+# Subtest: import validates before transaction and default source is import
+ok 8 - import validates before transaction and default source is import
+  ---
+  duration_ms: 0.799334
+  type: 'test'
+  ...
+# Subtest: database path has a stable default and environment override creates its parent directory
+ok 9 - database path has a stable default and environment override creates its parent directory
+  ---
+  duration_ms: 2.673666
+  type: 'test'
+  ...
+# Subtest: CLI runs through a package-style symlink
+ok 10 - CLI runs through a package-style symlink
+  ---
+  duration_ms: 88.69375
+  type: 'test'
+  ...
+# Subtest: CLI supports add, import, reads, errors, project metadata, and export formats
+ok 11 - CLI supports add, import, reads, errors, project metadata, and export formats
+  ---
+  duration_ms: 26.226375
+  type: 'test'
+  ...
+# Subtest: server handles Web UI and REST API request routing
+ok 12 - server handles Web UI and REST API request routing
+  ---
+  duration_ms: 11.268667
+  type: 'test'
+  ...
+# Subtest: entry detail endpoint includes completion evidence and handles missing entries
+ok 13 - entry detail endpoint includes completion evidence and handles missing entries
+  ---
+  duration_ms: 1.190625
+  type: 'test'
+  ...
+# Subtest: startServer initializes HTTP server, closes clean, and handles 500 error boundary
+ok 14 - startServer initializes HTTP server, closes clean, and handles 500 error boundary
+  ---
+  duration_ms: 12.616792
+  type: 'test'
+  ...
+# Subtest: openBrowser executes without throwing on all platforms
+ok 15 - openBrowser executes without throwing on all platforms
+  ---
+  duration_ms: 5.8315
+  type: 'test'
+  ...
+# Subtest: CLI serve command supports port, host, no-open, and json output
+ok 16 - CLI serve command supports port, host, no-open, and json output
+  ---
+  duration_ms: 7.227875
+  type: 'test'
+  ...
+# Subtest: getWebUIHTML defaults to Chinese and supports zh/en i18n switching
+ok 17 - getWebUIHTML defaults to Chinese and supports zh/en i18n switching
+  ---
+  duration_ms: 10.61
+  type: 'test'
+  ...
+# Subtest: Todos are independent, source-linked, idempotent, portable, and leave history intact
+ok 18 - Todos are independent, source-linked, idempotent, portable, and leave history intact
+  ---
+  duration_ms: 8.839417
+  type: 'test'
+  ...
+# Subtest: legacy steps only convert explicitly; project-only todos survive scoped exports
+ok 19 - legacy steps only convert explicitly; project-only todos survive scoped exports
+  ---
+  duration_ms: 1.164375
+  type: 'test'
+  ...
+# Subtest: dashboard write APIs enforce local origin, validate input, and persist changes
+ok 20 - dashboard write APIs enforce local origin, validate input, and persist changes
+  ---
+  duration_ms: 48.417042
+  type: 'test'
+  ...
+# Subtest: Todo CLI creates, lists, and completes standalone work
+ok 21 - Todo CLI creates, lists, and completes standalone work
+  ---
+  duration_ms: 5.155584
+  type: 'test'
+  ...
+# Subtest: completing an older activity preserves current project context without duplicating Todos
+ok 22 - completing an older activity preserves current project context without duplicating Todos
+  ---
+  duration_ms: 2.389166
+  type: 'test'
+  ...
+# Subtest: HTTP body decoding preserves UTF-8 across chunks
+ok 23 - HTTP body decoding preserves UTF-8 across chunks
+  ---
+  duration_ms: 23.549583
+  type: 'test'
+  ...
+1..23
+# tests 23
+# suites 0
+# pass 23
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 329.021125

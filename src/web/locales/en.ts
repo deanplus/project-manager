@@ -1,6 +1,23 @@
 import type { LocaleMessages } from "./zh.js";
 
 export const en: LocaleMessages = {
+  savedRefreshError:
+    "Saved, but the list could not refresh. Refresh before retrying.",
+  todos: "Todos",
+  todoTitle: "Todo title",
+  addTodo: "Add Todo",
+  complete: "Mark completed",
+  convertTodo: "Convert to Todo",
+  noTodos: "No Todos",
+  noProject: "No project",
+  sourceEntry: "Source activity",
+  reopen: "Reopen",
+  cancelTodo: "Cancel Todo",
+  todo_open: "Open",
+  todo_completed: "Completed",
+  todo_cancelled: "Cancelled",
+  viewTodos: "View Todos",
+  chooseProject: "Assign project",
   htmlLang: "en",
   pageTitle: "Project Manager - Projects & Activity Feed",
   appTitle: "Project Manager",

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add independent Todos with optional project/source links, per-item completion, cancellation, reopening, and CLI commands.
+- Create Todos atomically from new next steps and explicitly convert legacy steps without rewriting history.
+- Add dashboard activity completion controls and project-filtered Todo views.
+- Preserve Todo state in version-3 exports and enforce same-origin local JSON writes.
+
 ## 0.3.2 - 2026-10-16
 
 - Add general and per-command CLI help, no-argument help, and package version aliases without opening the database.

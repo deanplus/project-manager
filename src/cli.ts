@@ -4,6 +4,9 @@ import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   addStatus,
+  createTodo,
+  listTodos,
+  updateTodo,
   at,
   current,
   history,
@@ -88,6 +91,9 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
       "json",
     ]),
   ],
+  ["todo-add", new Set(["title", "project", "entry", "json"])],
+  ["todos", new Set(["project", "json"])],
+  ["todo-update", new Set(["uid", "status", "project", "json"])],
   ["complete", new Set(["entry", "by", "reason", "source", "json"])],
   ["revoke-completion", new Set(["entry", "by", "reason", "source", "json"])],
   ["import", new Set(["file", "json"])],
@@ -116,6 +122,15 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
 ]);
 
 const commandHelp: Record<string, [string, string]> = {
+  "todo-add": [
+    "Create an independent or linked Todo",
+    "--title <text> [--project <name>] [--entry <uid>] [--json]",
+  ],
+  todos: ["List Todos", "[--project <name>] [--json]"],
+  "todo-update": [
+    "Change Todo status or assign a project",
+    "--uid <uuid> [--status open|completed|cancelled] [--project <name>] [--json]",
+  ],
   add: [
     "Append a status snapshot",
     "--project <name> --summary <text> [options]",
@@ -340,6 +355,40 @@ export function run(
   const json = flags.json === true;
   try {
     switch (action) {
+      case "todo-add":
+        output(
+          createTodo(db, {
+            title: stringFlag(flags, "title", true),
+            project: stringFlag(flags, "project"),
+            entryUid: stringFlag(flags, "entry"),
+          }),
+          json,
+          write,
+        );
+        break;
+      case "todos": {
+        const todos = listTodos(db, stringFlag(flags, "project"));
+        if (json) output(todos, true, write);
+        else
+          write(
+            todos
+              .map(
+                (t) => `${t.uid}\t${t.status}\t${t.project ?? "-"}\t${t.title}`,
+              )
+              .join("\n") + "\n",
+          );
+        break;
+      }
+      case "todo-update":
+        output(
+          updateTodo(db, stringFlag(flags, "uid", true)!, {
+            status: stringFlag(flags, "status"),
+            project: stringFlag(flags, "project"),
+          }),
+          json,
+          write,
+        );
+        break;
       case "add": {
         const project = stringFlag(flags, "project", true) as string;
         const description = stringFlag(flags, "description");

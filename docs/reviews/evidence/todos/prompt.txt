@@ -1,0 +1,8 @@
+You are the independent CC reviewer. Read-only: do not edit files, stage, commit, push, deploy, start other reviewers, or write project status. Do not read or output .env, credentials, private keys, tokens, auth/session data, production logs, or database data.
+Original user request: 项目的“下一步”是不是改为创建一个todo（也可以多个），该todo指向该任务。然后todo也可以凭空创建
+Follow-up authorization: 去处理吧。另外，洁面上还需要把动态/todo标为已完成的操作。一起处理
+Accepted discussion: Todo independently created with optional project; source-linked Todos belong to source project; multiple per activity; completion independent; legacy text explicitly convertible. Task refers to activity entry, no separate Task entity.
+Authority: requiments/todos.md.
+Repository /Users/dwong/mydoc/code/projects/project-mgr. Base HEAD a3cf9e822c2203da132c4e82756cf2845769ac1c. Initially clean. Scope: git diff HEAD -- src test README.md docs/architecture.md; untracked test/todos.test.ts and requiments/todos.md. Review evidence excluded: docs/reviews/evidence/todos and docs/reviews/todos.md. All changes in this scope are this task's.
+Independently establish requirements; do not rely on coder conclusions. Read full changed files, related callers and consumers; trace UI/API/database and CLI/export/import. Inspect boundaries, failure propagation, concurrency, resource handling and test gaps. No execution required; if unable to verify dynamically state static-only limitation. Findings require stable IDs, severity, concrete trigger, impact, exact path/line evidence and suggested fix. Distinguish unverified concerns and unrelated issues.
+Return reviewer/model/effort (unknown if not known), complete/limited status, actual coverage and limits, findings or explicit no-findings statement. Do not treat passing tests as sufficient review.

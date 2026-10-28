@@ -115,6 +115,21 @@ export function openLedger(path = databasePath()): Ledger {
         BEGIN SELECT RAISE(ABORT, 'entry uid required; upgrade the writer'); END;`);
       db.prepare("INSERT INTO schema_migrations(version) VALUES (3)").run();
     }
+    if (
+      !db.prepare("SELECT 1 FROM schema_migrations WHERE version = 4").get()
+    ) {
+      db.exec(`ALTER TABLE status_entries ADD COLUMN next_steps_source_uid TEXT REFERENCES status_entries(uid);
+        CREATE TABLE todos (
+        uid TEXT PRIMARY KEY, title TEXT NOT NULL,
+        project TEXT REFERENCES projects(slug),
+        entry_uid TEXT REFERENCES status_entries(uid),
+        step_index INTEGER, status TEXT NOT NULL CHECK(status IN ('open','completed','cancelled')),
+        created_at TEXT NOT NULL, completed_at TEXT,
+        UNIQUE(entry_uid, step_index)
+      );
+      CREATE INDEX idx_todos_project ON todos(project);
+      INSERT INTO schema_migrations(version) VALUES (4);`);
+    }
   }).immediate();
   return db;
 }
@@ -129,6 +144,9 @@ function entryFromRow(row: Record<string, unknown>): StatusEntry {
     ...(row.progress ? { progress: row.progress as string } : {}),
     blockers: JSON.parse(row.blockers_json as string) as string[],
     nextSteps: JSON.parse(row.next_steps_json as string) as string[],
+    ...(row.next_steps_source_uid
+      ? { nextStepsSourceUid: row.next_steps_source_uid as string }
+      : {}),
     decisions: JSON.parse(row.decisions_json as string) as string[],
     tags: JSON.parse(row.tags_json as string) as string[],
     occurredAt: row.occurred_at as string,
@@ -283,6 +301,10 @@ export function addStatus(
   return db
     .transaction(() => {
       const result = addValidatedStatus(db, input);
+      if (result.inserted && !result.entry.nextStepsSourceUid)
+        result.entry.nextSteps.forEach((_, index) =>
+          convertNextStep(db, result.entry.uid, index),
+        );
       for (const target of completes)
         changeCompletion(
           db,
@@ -334,6 +356,17 @@ function addValidatedStatus(
       return { entry: existing, inserted: false };
     }
   }
+  if (input.nextStepsSourceUid) {
+    const origin = getEntry(db, input.nextStepsSourceUid);
+    if (
+      !origin ||
+      origin.nextStepsSourceUid !== undefined ||
+      origin.project !== input.project ||
+      origin.occurredAt >= input.occurredAt ||
+      !isDeepStrictEqual(origin.nextSteps, input.nextSteps)
+    )
+      throw new ValidationError("invalid next step provenance");
+  }
   const now = recordedAt ?? new Date().toISOString();
   upsertProjectMetadata(db, { project: input.project });
 
@@ -342,8 +375,8 @@ function addValidatedStatus(
     .get(input.project) as { id: number };
   const result = db
     .prepare(
-      `INSERT INTO status_entries(project_id, status, summary, progress, blockers_json, next_steps_json, decisions_json, tags_json, occurred_at, recorded_at, source, external_ref, uid)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO status_entries(project_id, status, summary, progress, blockers_json, next_steps_json, decisions_json, tags_json, occurred_at, recorded_at, source, external_ref, uid, next_steps_source_uid)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       project.id,
@@ -359,6 +392,7 @@ function addValidatedStatus(
       input.source,
       input.externalRef ?? null,
       input.uid ?? randomUUID(),
+      input.nextStepsSourceUid ?? null,
     );
   return {
     entry: one(
@@ -638,7 +672,18 @@ export function exportLedger(db: Ledger, project?: string) {
         `SELECT c.* FROM completion_events c JOIN status_entries e ON e.uid = c.target_uid JOIN projects p ON p.id = e.project_id ${project ? "WHERE p.slug = ?" : ""} ORDER BY c.id`,
       )
       .all(...(project ? [project] : [])) as Record<string, unknown>[];
-    return { version: 2, entries, completions: rows.map(completionFromRow) };
+    const todos = listTodos(db, project);
+    return {
+      version:
+        todos.length || entries.some((entry) => entry.nextStepsSourceUid)
+          ? 3
+          : 2,
+      entries,
+      completions: rows.map(completionFromRow),
+      ...(todos.length || entries.some((entry) => entry.nextStepsSourceUid)
+        ? { todos }
+        : {}),
+    };
   })();
 }
 
@@ -694,9 +739,16 @@ export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
       const results: InsertResult[] = [];
       for (const value of values) {
         if (value && typeof value === "object" && "version" in value) {
-          const bundle = record(value, ["version", "entries", "completions"]);
+          const bundle = record(value, [
+            "version",
+            "entries",
+            "completions",
+            "todos",
+          ]);
           if (
-            bundle.version !== 2 ||
+            (bundle.version !== 2 && bundle.version !== 3) ||
+            (bundle.version === 3 && !Array.isArray(bundle.todos)) ||
+            (bundle.version === 2 && bundle.todos !== undefined) ||
             !Array.isArray(bundle.entries) ||
             !Array.isArray(bundle.completions)
           )
@@ -716,12 +768,234 @@ export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
           }
           for (const event of bundle.completions)
             insertCompletion(db, validateCompletionEvent(event));
+          if (bundle.version === 3)
+            for (const todo of bundle.todos as unknown[]) importTodo(db, todo);
         } else
           results.push(
             addValidatedStatus(db, validateStatusEntry(value, "import")),
           );
       }
       return results;
+    })
+    .immediate();
+}
+
+export type Todo = {
+  uid: string;
+  title: string;
+  project: string | null;
+  entryUid: string | null;
+  stepIndex: number | null;
+  status: "open" | "completed" | "cancelled";
+  createdAt: string;
+  completedAt: string | null;
+};
+const todoSelect = `SELECT uid, title, project, entry_uid AS entryUid,
+  step_index AS stepIndex, status, created_at AS createdAt, completed_at AS completedAt FROM todos`;
+export function listTodos(db: Ledger, project?: string): Todo[] {
+  return db
+    .prepare(
+      todoSelect +
+        (project ? " WHERE project = ?" : "") +
+        " ORDER BY created_at, uid",
+    )
+    .all(...(project ? [project] : [])) as Todo[];
+}
+function insertTodo(db: Ledger, todo: Todo): Todo {
+  db.prepare(
+    `INSERT INTO todos(uid,title,project,entry_uid,step_index,status,created_at,completed_at)
+    VALUES (?,?,?,?,?,?,?,?)`,
+  ).run(
+    todo.uid,
+    todo.title,
+    todo.project,
+    todo.entryUid,
+    todo.stepIndex,
+    todo.status,
+    todo.createdAt,
+    todo.completedAt,
+  );
+  return todo;
+}
+export function createTodo(db: Ledger, value: unknown): Todo {
+  const input = record(value, ["title", "project", "entryUid"]);
+  if (
+    typeof input.title !== "string" ||
+    !input.title.trim() ||
+    input.title.trim().length > 2000
+  )
+    throw new ValidationError("title must contain 1 to 2000 characters");
+  let project: string | null = null;
+  let entryUid: string | null = null;
+  if (input.project != null) {
+    project = validateProjectMetadataInput({ project: input.project }).project;
+    if (!db.prepare("SELECT 1 FROM projects WHERE slug = ?").get(project))
+      throw new ValidationError("project not found");
+  }
+  if (input.entryUid != null) {
+    const entry = getEntry(db, validateUid(input.entryUid));
+    if (!entry) throw new ValidationError("entry not found");
+    if (project && project !== entry.project)
+      throw new ValidationError("source project mismatch");
+    project = entry.project;
+    entryUid = entry.uid;
+  }
+  return insertTodo(db, {
+    uid: randomUUID(),
+    title: input.title.trim(),
+    project,
+    entryUid,
+    stepIndex: null,
+    status: "open",
+    createdAt: new Date().toISOString(),
+    completedAt: null,
+  });
+}
+export function convertNextStep(db: Ledger, ref: string, index: number): Todo {
+  return db
+    .transaction(() => {
+      const entry = getEntry(db, ref);
+      if (
+        !entry ||
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= entry.nextSteps.length
+      )
+        throw new ValidationError("next step not found");
+      if (entry.nextStepsSourceUid)
+        return convertNextStep(db, entry.nextStepsSourceUid, index);
+      const existing = db
+        .prepare(todoSelect + " WHERE entry_uid = ? AND step_index = ?")
+        .get(entry.uid, index) as Todo | undefined;
+      if (existing) return existing;
+      return insertTodo(db, {
+        uid: randomUUID(),
+        title: entry.nextSteps[index],
+        project: entry.project,
+        entryUid: entry.uid,
+        stepIndex: index,
+        status: "open",
+        createdAt: new Date().toISOString(),
+        completedAt: null,
+      });
+    })
+    .immediate();
+}
+export function updateTodo(db: Ledger, uid: string, value: unknown): Todo {
+  validateUid(uid);
+  const input = record(value, ["status", "project"]);
+  return db
+    .transaction(() => {
+      const todo = db.prepare(todoSelect + " WHERE uid = ?").get(uid) as
+        Todo | undefined;
+      if (!todo) throw new ValidationError("todo not found");
+      if (input.status !== undefined) {
+        if (
+          !["open", "completed", "cancelled"].includes(input.status as string)
+        )
+          throw new ValidationError("invalid todo status");
+        if (todo.status !== input.status) {
+          todo.status = input.status as Todo["status"];
+          todo.completedAt =
+            todo.status === "completed" ? new Date().toISOString() : null;
+        }
+      }
+      if (input.project !== undefined) {
+        if (todo.entryUid)
+          throw new ValidationError("source-linked todo project cannot change");
+        todo.project =
+          input.project === null
+            ? null
+            : validateProjectMetadataInput({ project: input.project }).project;
+        if (
+          todo.project &&
+          !db.prepare("SELECT 1 FROM projects WHERE slug = ?").get(todo.project)
+        )
+          throw new ValidationError("project not found");
+      }
+      db.prepare(
+        "UPDATE todos SET status=?, completed_at=?, project=? WHERE uid=?",
+      ).run(todo.status, todo.completedAt, todo.project, uid);
+      return todo;
+    })
+    .immediate();
+}
+function importTodo(db: Ledger, value: unknown): void {
+  const input = record(value, [
+    "uid",
+    "title",
+    "project",
+    "entryUid",
+    "stepIndex",
+    "status",
+    "createdAt",
+    "completedAt",
+  ]);
+  validateUid(input.uid);
+  if (
+    typeof input.title !== "string" ||
+    !input.title.trim() ||
+    input.title.length > 2000
+  )
+    throw new ValidationError("invalid todo title");
+  if (!["open", "completed", "cancelled"].includes(input.status as string))
+    throw new ValidationError("invalid todo status");
+  parseTime(input.createdAt, "createdAt");
+  if (input.status === "completed") parseTime(input.completedAt, "completedAt");
+  else if (input.completedAt !== null)
+    throw new ValidationError("invalid completion timestamp");
+  if (input.project !== null) {
+    validateProjectMetadataInput({ project: input.project });
+    upsertProjectMetadata(db, { project: input.project as string });
+  }
+  if (input.entryUid !== null) {
+    const entry = getEntry(db, validateUid(input.entryUid));
+    if (!entry || entry.project !== input.project)
+      throw new ValidationError("invalid todo source");
+    if (
+      input.stepIndex !== null &&
+      (!Number.isInteger(input.stepIndex) ||
+        Number(input.stepIndex) < 0 ||
+        entry.nextSteps[Number(input.stepIndex)] !== input.title)
+    )
+      throw new ValidationError("invalid next step index");
+  } else if (input.stepIndex !== null)
+    throw new ValidationError("next step requires a source");
+  const todo = input as Todo;
+  const existing = db.prepare(todoSelect + " WHERE uid = ?").get(todo.uid);
+  if (existing) {
+    if (!isDeepStrictEqual(existing, todo))
+      throw new ValidationError("conflicting todo uid");
+  } else insertTodo(db, todo);
+}
+export function completeActivity(db: Ledger, ref: string): StatusEntry {
+  return db
+    .transaction(() => {
+      const entry = getEntry(db, ref);
+      if (!entry) throw new ValidationError("entry not found");
+      if (entry.effectiveStatus === "completed") return entry;
+      const latest = current(db, entry.project)[0];
+      const occurredAt = new Date(
+        Math.max(Date.now(), Date.parse(latest.occurredAt) + 1),
+      ).toISOString();
+      // Preserve current context without generating another set of next-step Todos.
+      const followUp = addValidatedStatus(
+        db,
+        validateStatusEntry({
+          project: entry.project,
+          status: latest.status,
+          summary: `Completed activity #${entry.id}`,
+          progress: latest.progress,
+          blockers: latest.blockers,
+          nextSteps: latest.nextSteps,
+          nextStepsSourceUid: latest.nextStepsSourceUid ?? latest.uid,
+          decisions: latest.decisions,
+          tags: latest.tags,
+          occurredAt,
+        }),
+      );
+      changeCompletion(db, entry.uid, followUp.entry.uid);
+      return getEntry(db, entry.uid)!;
     })
     .immediate();
 }

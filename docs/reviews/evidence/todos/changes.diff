@@ -1,0 +1,1032 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 592a3f1..a1dd083 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,12 @@
+ # Changelog
+ 
++## Unreleased
++
++- Add independent Todos with optional project/source links, per-item completion, cancellation, reopening, and CLI commands.
++- Create Todos atomically from new next steps and explicitly convert legacy steps without rewriting history.
++- Add dashboard activity completion controls and project-filtered Todo views.
++- Preserve Todo state in version-3 exports and enforce same-origin local JSON writes.
++
+ ## 0.3.2 - 2026-10-16
+ 
+ - Add general and per-command CLI help, no-argument help, and package version aliases without opening the database.
+diff --git a/README.md b/README.md
+index 02756c1..8db64ac 100644
+--- a/README.md
++++ b/README.md
+@@ -333,3 +333,25 @@ Activity cards display Completed with a follow-up link and retain original detai
+ Export now emits a version-2 bundle `{ "version": 2, "entries": [...], "completions": [...] }`. JSONL emits one complete bundle per line. Entries retain UUIDs and recording times; events retain UUIDs and per-target predecessor links, including revocations. Import accepts legacy entry objects/arrays/JSONL and version-2 bundles, checks identity conflicts, and applies each file atomically. Re-importing the same bundle is idempotent. Event order is significant: import events in exported order; divergent histories fail instead of silently merging. Older clients cannot import version-2 bundles. Migration adds UUIDs to existing snapshots without changing their content.
+ 
+ Independently migrated copies of legacy data receive different UUIDs. Cross-import may fail on an existing `externalRef`; no implicit identity adoption occurs. Restore a bundle into a fresh database for a faithful migration. Older writers are rejected if they omit UUIDs. With an existing `externalRef`, `add` retains its existing snapshot and applies explicitly supplied `--completes` links to that snapshot; identical active links are no-ops. Use `complete` to make after-the-fact reconciliation explicit.
++
++### Todos and dashboard actions
++
++New `add --next` values create independent Todos linked to the new activity.
++Historical next steps stay as text until explicitly converted in the dashboard.
++The Todos tab supports standalone creation, optional project assignment, source
++links, completion, cancellation, and reopening. Project cards filter this list.
++Activity cards provide **Mark completed**, recording a follow-up with the current
++project status; this neither completes the project nor its Todos.
++
++```sh
++pmgr todo-add --title "Review results" --project demo --json
++pmgr todo-add --title "Unassigned idea" --json
++pmgr todos --project demo --json
++pmgr todo-update --uid <todo-uuid> --status completed --json
++```
++
++Exports with Todos use version 3 and preserve their identities and state;
++version-2 and legacy imports remain supported without creating new Todos from
++old next-step text. Conflicting Todo snapshots are rejected atomically on import.
++Dashboard writes are restricted to same-origin localhost requests with JSON bodies;
++remote-host dashboards remain read-only.
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 3d463ef..37706a5 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -102,3 +102,25 @@ Exports have no record limit and read raw snapshots directly in oldest-to-newest
+ History/current/detail reads return original status, effective status, recency, and completion evidence independently of pagination/date filters. `at` retains snapshot-only semantics. Cards display Completed plus a navigable source while retaining original details. The project current state still comes from the latest snapshot.
+ 
+ Migration 3 backfills random UUIDs and rejects inserts lacking a UUID, so old writers fail explicitly instead of creating unreadable records. Independently migrated copies of legacy data have different UUIDs; importing across them may fail on an existing external reference. There is no automatic identity adoption or cross-database reconciliation. Export from one authoritative ledger and restore into a fresh database when migrating.
++
++## Independent Todos (migration 4)
++
++`todos` stores stable UUIDs, title, optional project/source UUID, optional legacy
++step index, status, creation time, and completion time. Source links constrain
++project ownership. A unique source/index pair makes conversion retry-safe.
++New `addStatus` calls create next-step Todos in the same transaction; imports do
++not implicitly create work. Todos are editable current state, while activity
++snapshots and their completion events remain append-only. Version-3 bundles
++include Todos; conflicts reject the entire import rather than overwrite changes.
++
++The local dashboard exposes JSON POST routes for Todo creation/update, explicit
++step conversion, and activity completion. Activity completion appends a follow-up
++retaining current project status and links the original activity. Todo state is
++independent. Mutations reject non-local Host headers, cross-origin requests,
++non-JSON bodies, and bodies exceeding 32 KiB.
++
++Completion follow-ups preserve all current snapshot context. Their optional
++`nextStepsSourceUid` points directly to the earlier original next-step source
++(same project and identical text). UI rendering and server-side conversion reuse
++that source's Todos, including after export/import; copying context never creates
++a second conversion identity.
+diff --git a/src/cli.ts b/src/cli.ts
+index 7f8c6b4..20f0397 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -4,6 +4,9 @@ import { basename } from "node:path";
+ import { pathToFileURL } from "node:url";
+ import {
+   addStatus,
++  createTodo,
++  listTodos,
++  updateTodo,
+   at,
+   current,
+   history,
+@@ -88,6 +91,9 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
+       "json",
+     ]),
+   ],
++  ["todo-add", new Set(["title", "project", "entry", "json"])],
++  ["todos", new Set(["project", "json"])],
++  ["todo-update", new Set(["uid", "status", "project", "json"])],
+   ["complete", new Set(["entry", "by", "reason", "source", "json"])],
+   ["revoke-completion", new Set(["entry", "by", "reason", "source", "json"])],
+   ["import", new Set(["file", "json"])],
+@@ -116,6 +122,15 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
+ ]);
+ 
+ const commandHelp: Record<string, [string, string]> = {
++  "todo-add": [
++    "Create an independent or linked Todo",
++    "--title <text> [--project <name>] [--entry <uid>] [--json]",
++  ],
++  todos: ["List Todos", "[--project <name>] [--json]"],
++  "todo-update": [
++    "Change Todo status or assign a project",
++    "--uid <uuid> [--status open|completed|cancelled] [--project <name>] [--json]",
++  ],
+   add: [
+     "Append a status snapshot",
+     "--project <name> --summary <text> [options]",
+@@ -340,6 +355,40 @@ export function run(
+   const json = flags.json === true;
+   try {
+     switch (action) {
++      case "todo-add":
++        output(
++          createTodo(db, {
++            title: stringFlag(flags, "title", true),
++            project: stringFlag(flags, "project"),
++            entryUid: stringFlag(flags, "entry"),
++          }),
++          json,
++          write,
++        );
++        break;
++      case "todos": {
++        const todos = listTodos(db, stringFlag(flags, "project"));
++        if (json) output(todos, true, write);
++        else
++          write(
++            todos
++              .map(
++                (t) => `${t.uid}\t${t.status}\t${t.project ?? "-"}\t${t.title}`,
++              )
++              .join("\n") + "\n",
++          );
++        break;
++      }
++      case "todo-update":
++        output(
++          updateTodo(db, stringFlag(flags, "uid", true)!, {
++            status: stringFlag(flags, "status"),
++            project: stringFlag(flags, "project"),
++          }),
++          json,
++          write,
++        );
++        break;
+       case "add": {
+         const project = stringFlag(flags, "project", true) as string;
+         const description = stringFlag(flags, "description");
+diff --git a/src/db.ts b/src/db.ts
+index fda8ceb..9d0998b 100644
+--- a/src/db.ts
++++ b/src/db.ts
+@@ -115,6 +115,21 @@ export function openLedger(path = databasePath()): Ledger {
+         BEGIN SELECT RAISE(ABORT, 'entry uid required; upgrade the writer'); END;`);
+       db.prepare("INSERT INTO schema_migrations(version) VALUES (3)").run();
+     }
++    if (
++      !db.prepare("SELECT 1 FROM schema_migrations WHERE version = 4").get()
++    ) {
++      db.exec(`ALTER TABLE status_entries ADD COLUMN next_steps_source_uid TEXT REFERENCES status_entries(uid);
++        CREATE TABLE todos (
++        uid TEXT PRIMARY KEY, title TEXT NOT NULL,
++        project TEXT REFERENCES projects(slug),
++        entry_uid TEXT REFERENCES status_entries(uid),
++        step_index INTEGER, status TEXT NOT NULL CHECK(status IN ('open','completed','cancelled')),
++        created_at TEXT NOT NULL, completed_at TEXT,
++        UNIQUE(entry_uid, step_index)
++      );
++      CREATE INDEX idx_todos_project ON todos(project);
++      INSERT INTO schema_migrations(version) VALUES (4);`);
++    }
+   }).immediate();
+   return db;
+ }
+@@ -129,6 +144,9 @@ function entryFromRow(row: Record<string, unknown>): StatusEntry {
+     ...(row.progress ? { progress: row.progress as string } : {}),
+     blockers: JSON.parse(row.blockers_json as string) as string[],
+     nextSteps: JSON.parse(row.next_steps_json as string) as string[],
++    ...(row.next_steps_source_uid
++      ? { nextStepsSourceUid: row.next_steps_source_uid as string }
++      : {}),
+     decisions: JSON.parse(row.decisions_json as string) as string[],
+     tags: JSON.parse(row.tags_json as string) as string[],
+     occurredAt: row.occurred_at as string,
+@@ -283,6 +301,10 @@ export function addStatus(
+   return db
+     .transaction(() => {
+       const result = addValidatedStatus(db, input);
++      if (result.inserted && !result.entry.nextStepsSourceUid)
++        result.entry.nextSteps.forEach((_, index) =>
++          convertNextStep(db, result.entry.uid, index),
++        );
+       for (const target of completes)
+         changeCompletion(
+           db,
+@@ -334,6 +356,17 @@ function addValidatedStatus(
+       return { entry: existing, inserted: false };
+     }
+   }
++  if (input.nextStepsSourceUid) {
++    const origin = getEntry(db, input.nextStepsSourceUid);
++    if (
++      !origin ||
++      origin.nextStepsSourceUid !== undefined ||
++      origin.project !== input.project ||
++      origin.occurredAt >= input.occurredAt ||
++      !isDeepStrictEqual(origin.nextSteps, input.nextSteps)
++    )
++      throw new ValidationError("invalid next step provenance");
++  }
+   const now = recordedAt ?? new Date().toISOString();
+   upsertProjectMetadata(db, { project: input.project });
+ 
+@@ -342,8 +375,8 @@ function addValidatedStatus(
+     .get(input.project) as { id: number };
+   const result = db
+     .prepare(
+-      `INSERT INTO status_entries(project_id, status, summary, progress, blockers_json, next_steps_json, decisions_json, tags_json, occurred_at, recorded_at, source, external_ref, uid)
+-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
++      `INSERT INTO status_entries(project_id, status, summary, progress, blockers_json, next_steps_json, decisions_json, tags_json, occurred_at, recorded_at, source, external_ref, uid, next_steps_source_uid)
++      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     )
+     .run(
+       project.id,
+@@ -359,6 +392,7 @@ function addValidatedStatus(
+       input.source,
+       input.externalRef ?? null,
+       input.uid ?? randomUUID(),
++      input.nextStepsSourceUid ?? null,
+     );
+   return {
+     entry: one(
+@@ -638,7 +672,18 @@ export function exportLedger(db: Ledger, project?: string) {
+         `SELECT c.* FROM completion_events c JOIN status_entries e ON e.uid = c.target_uid JOIN projects p ON p.id = e.project_id ${project ? "WHERE p.slug = ?" : ""} ORDER BY c.id`,
+       )
+       .all(...(project ? [project] : [])) as Record<string, unknown>[];
+-    return { version: 2, entries, completions: rows.map(completionFromRow) };
++    const todos = listTodos(db, project);
++    return {
++      version:
++        todos.length || entries.some((entry) => entry.nextStepsSourceUid)
++          ? 3
++          : 2,
++      entries,
++      completions: rows.map(completionFromRow),
++      ...(todos.length || entries.some((entry) => entry.nextStepsSourceUid)
++        ? { todos }
++        : {}),
++    };
+   })();
+ }
+ 
+@@ -694,9 +739,16 @@ export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
+       const results: InsertResult[] = [];
+       for (const value of values) {
+         if (value && typeof value === "object" && "version" in value) {
+-          const bundle = record(value, ["version", "entries", "completions"]);
++          const bundle = record(value, [
++            "version",
++            "entries",
++            "completions",
++            "todos",
++          ]);
+           if (
+-            bundle.version !== 2 ||
++            (bundle.version !== 2 && bundle.version !== 3) ||
++            (bundle.version === 3 && !Array.isArray(bundle.todos)) ||
++            (bundle.version === 2 && bundle.todos !== undefined) ||
+             !Array.isArray(bundle.entries) ||
+             !Array.isArray(bundle.completions)
+           )
+@@ -716,6 +768,8 @@ export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
+           }
+           for (const event of bundle.completions)
+             insertCompletion(db, validateCompletionEvent(event));
++          if (bundle.version === 3)
++            for (const todo of bundle.todos as unknown[]) importTodo(db, todo);
+         } else
+           results.push(
+             addValidatedStatus(db, validateStatusEntry(value, "import")),
+@@ -725,3 +779,223 @@ export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
+     })
+     .immediate();
+ }
++
++export type Todo = {
++  uid: string;
++  title: string;
++  project: string | null;
++  entryUid: string | null;
++  stepIndex: number | null;
++  status: "open" | "completed" | "cancelled";
++  createdAt: string;
++  completedAt: string | null;
++};
++const todoSelect = `SELECT uid, title, project, entry_uid AS entryUid,
++  step_index AS stepIndex, status, created_at AS createdAt, completed_at AS completedAt FROM todos`;
++export function listTodos(db: Ledger, project?: string): Todo[] {
++  return db
++    .prepare(
++      todoSelect +
++        (project ? " WHERE project = ?" : "") +
++        " ORDER BY created_at, uid",
++    )
++    .all(...(project ? [project] : [])) as Todo[];
++}
++function insertTodo(db: Ledger, todo: Todo): Todo {
++  db.prepare(
++    `INSERT INTO todos(uid,title,project,entry_uid,step_index,status,created_at,completed_at)
++    VALUES (?,?,?,?,?,?,?,?)`,
++  ).run(
++    todo.uid,
++    todo.title,
++    todo.project,
++    todo.entryUid,
++    todo.stepIndex,
++    todo.status,
++    todo.createdAt,
++    todo.completedAt,
++  );
++  return todo;
++}
++export function createTodo(db: Ledger, value: unknown): Todo {
++  const input = record(value, ["title", "project", "entryUid"]);
++  if (
++    typeof input.title !== "string" ||
++    !input.title.trim() ||
++    input.title.trim().length > 2000
++  )
++    throw new ValidationError("title must contain 1 to 2000 characters");
++  let project: string | null = null;
++  let entryUid: string | null = null;
++  if (input.project != null) {
++    project = validateProjectMetadataInput({ project: input.project }).project;
++    if (!db.prepare("SELECT 1 FROM projects WHERE slug = ?").get(project))
++      throw new ValidationError("project not found");
++  }
++  if (input.entryUid != null) {
++    const entry = getEntry(db, validateUid(input.entryUid));
++    if (!entry) throw new ValidationError("entry not found");
++    if (project && project !== entry.project)
++      throw new ValidationError("source project mismatch");
++    project = entry.project;
++    entryUid = entry.uid;
++  }
++  return insertTodo(db, {
++    uid: randomUUID(),
++    title: input.title.trim(),
++    project,
++    entryUid,
++    stepIndex: null,
++    status: "open",
++    createdAt: new Date().toISOString(),
++    completedAt: null,
++  });
++}
++export function convertNextStep(db: Ledger, ref: string, index: number): Todo {
++  return db
++    .transaction(() => {
++      const entry = getEntry(db, ref);
++      if (
++        !entry ||
++        !Number.isInteger(index) ||
++        index < 0 ||
++        index >= entry.nextSteps.length
++      )
++        throw new ValidationError("next step not found");
++      if (entry.nextStepsSourceUid)
++        return convertNextStep(db, entry.nextStepsSourceUid, index);
++      const existing = db
++        .prepare(todoSelect + " WHERE entry_uid = ? AND step_index = ?")
++        .get(entry.uid, index) as Todo | undefined;
++      if (existing) return existing;
++      return insertTodo(db, {
++        uid: randomUUID(),
++        title: entry.nextSteps[index],
++        project: entry.project,
++        entryUid: entry.uid,
++        stepIndex: index,
++        status: "open",
++        createdAt: new Date().toISOString(),
++        completedAt: null,
++      });
++    })
++    .immediate();
++}
++export function updateTodo(db: Ledger, uid: string, value: unknown): Todo {
++  validateUid(uid);
++  const input = record(value, ["status", "project"]);
++  return db
++    .transaction(() => {
++      const todo = db.prepare(todoSelect + " WHERE uid = ?").get(uid) as
++        Todo | undefined;
++      if (!todo) throw new ValidationError("todo not found");
++      if (input.status !== undefined) {
++        if (
++          !["open", "completed", "cancelled"].includes(input.status as string)
++        )
++          throw new ValidationError("invalid todo status");
++        if (todo.status !== input.status) {
++          todo.status = input.status as Todo["status"];
++          todo.completedAt =
++            todo.status === "completed" ? new Date().toISOString() : null;
++        }
++      }
++      if (input.project !== undefined) {
++        if (todo.entryUid)
++          throw new ValidationError("source-linked todo project cannot change");
++        todo.project =
++          input.project === null
++            ? null
++            : validateProjectMetadataInput({ project: input.project }).project;
++        if (
++          todo.project &&
++          !db.prepare("SELECT 1 FROM projects WHERE slug = ?").get(todo.project)
++        )
++          throw new ValidationError("project not found");
++      }
++      db.prepare(
++        "UPDATE todos SET status=?, completed_at=?, project=? WHERE uid=?",
++      ).run(todo.status, todo.completedAt, todo.project, uid);
++      return todo;
++    })
++    .immediate();
++}
++function importTodo(db: Ledger, value: unknown): void {
++  const input = record(value, [
++    "uid",
++    "title",
++    "project",
++    "entryUid",
++    "stepIndex",
++    "status",
++    "createdAt",
++    "completedAt",
++  ]);
++  validateUid(input.uid);
++  if (
++    typeof input.title !== "string" ||
++    !input.title.trim() ||
++    input.title.length > 2000
++  )
++    throw new ValidationError("invalid todo title");
++  if (!["open", "completed", "cancelled"].includes(input.status as string))
++    throw new ValidationError("invalid todo status");
++  parseTime(input.createdAt, "createdAt");
++  if (input.status === "completed") parseTime(input.completedAt, "completedAt");
++  else if (input.completedAt !== null)
++    throw new ValidationError("invalid completion timestamp");
++  if (input.project !== null) {
++    validateProjectMetadataInput({ project: input.project });
++    upsertProjectMetadata(db, { project: input.project as string });
++  }
++  if (input.entryUid !== null) {
++    const entry = getEntry(db, validateUid(input.entryUid));
++    if (!entry || entry.project !== input.project)
++      throw new ValidationError("invalid todo source");
++    if (
++      input.stepIndex !== null &&
++      (!Number.isInteger(input.stepIndex) ||
++        Number(input.stepIndex) < 0 ||
++        entry.nextSteps[Number(input.stepIndex)] !== input.title)
++    )
++      throw new ValidationError("invalid next step index");
++  } else if (input.stepIndex !== null)
++    throw new ValidationError("next step requires a source");
++  const todo = input as Todo;
++  const existing = db.prepare(todoSelect + " WHERE uid = ?").get(todo.uid);
++  if (existing) {
++    if (!isDeepStrictEqual(existing, todo))
++      throw new ValidationError("conflicting todo uid");
++  } else insertTodo(db, todo);
++}
++export function completeActivity(db: Ledger, ref: string): StatusEntry {
++  return db
++    .transaction(() => {
++      const entry = getEntry(db, ref);
++      if (!entry) throw new ValidationError("entry not found");
++      if (entry.effectiveStatus === "completed") return entry;
++      const latest = current(db, entry.project)[0];
++      const occurredAt = new Date(
++        Math.max(Date.now(), Date.parse(latest.occurredAt) + 1),
++      ).toISOString();
++      // Preserve current context without generating another set of next-step Todos.
++      const followUp = addValidatedStatus(
++        db,
++        validateStatusEntry({
++          project: entry.project,
++          status: latest.status,
++          summary: `Completed activity #${entry.id}`,
++          progress: latest.progress,
++          blockers: latest.blockers,
++          nextSteps: latest.nextSteps,
++          nextStepsSourceUid: latest.nextStepsSourceUid ?? latest.uid,
++          decisions: latest.decisions,
++          tags: latest.tags,
++          occurredAt,
++        }),
++      );
++      changeCompletion(db, entry.uid, followUp.entry.uid);
++      return getEntry(db, entry.uid)!;
++    })
++    .immediate();
++}
+diff --git a/src/domain.ts b/src/domain.ts
+index 5de1e7f..90b1229 100644
+--- a/src/domain.ts
++++ b/src/domain.ts
+@@ -39,6 +39,7 @@ export type StatusEntryInput = {
+   progress?: string;
+   blockers?: string[];
+   nextSteps?: string[];
++  nextStepsSourceUid?: string;
+   decisions?: string[];
+   tags?: string[];
+   occurredAt?: string;
+@@ -47,8 +48,9 @@ export type StatusEntryInput = {
+ };
+ 
+ export type StatusEntry = Required<
+-  Omit<StatusEntryInput, "progress" | "externalRef">
++  Omit<StatusEntryInput, "progress" | "externalRef" | "nextStepsSourceUid">
+ > & {
++  nextStepsSourceUid?: string;
+   id: number;
+   progress?: string;
+   externalRef?: string;
+@@ -77,6 +79,7 @@ const keys = new Set([
+   "progress",
+   "blockers",
+   "nextSteps",
++  "nextStepsSourceUid",
+   "decisions",
+   "tags",
+   "occurredAt",
+@@ -212,6 +215,9 @@ export function validateStatusEntry(
+     progress: text(input.progress, "progress"),
+     blockers: textList(input.blockers, "blockers"),
+     nextSteps: textList(input.nextSteps, "nextSteps"),
++    ...(input.nextStepsSourceUid === undefined
++      ? {}
++      : { nextStepsSourceUid: validateUid(input.nextStepsSourceUid) }),
+     decisions: textList(input.decisions, "decisions"),
+     tags: textList(input.tags, "tags"),
+     occurredAt:
+@@ -236,6 +242,8 @@ export function toPortableStatusEntry(entry: StatusEntry): PortableStatusEntry {
+     occurredAt: entry.occurredAt,
+     source: entry.source,
+   };
++  if (entry.nextStepsSourceUid !== undefined)
++    result.nextStepsSourceUid = entry.nextStepsSourceUid;
+   if (entry.progress !== undefined) result.progress = entry.progress;
+   if (entry.externalRef !== undefined) result.externalRef = entry.externalRef;
+   return result;
+diff --git a/src/server.ts b/src/server.ts
+index 9d105d0..cda605b 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -8,12 +8,18 @@ import {
+ import { URL } from "node:url";
+ import {
+   countEntries,
++  createTodo,
++  listTodos,
++  updateTodo,
++  convertNextStep,
++  completeActivity,
+   getEntry,
+   history,
+   listProjects,
+   openLedger,
+   type Ledger,
+ } from "./db.js";
++import { ValidationError } from "./domain.js";
+ import { getWebUIHTML } from "./web/ui.js";
+ 
+ export type ServerOptions = {
+@@ -71,6 +77,15 @@ export function handleRequest(
+   res: ServerResponse,
+   db: Ledger,
+ ): void {
++  if (
++    req.method === "POST" &&
++    /^\/api\/(todos(?:\/[^/]+)?|entries\/[^/]+\/(complete|todos))$/.test(
++      (req.url || "").split("?")[0],
++    )
++  ) {
++    void handleMutation(req, res, db);
++    return;
++  }
+   if (req.method !== "GET" && req.method !== "HEAD") {
+     sendJson(res, 405, { error: "Method not allowed" });
+     return;
+@@ -103,6 +118,10 @@ export function handleRequest(
+     return;
+   }
+ 
++  if (pathname === "/api/todos") {
++    sendJson(res, 200, listTodos(db, query.project));
++    return;
++  }
+   if (pathname === "/api/projects") {
+     const projects = listProjects(db, { query: query.query });
+     sendJson(res, 200, projects);
+@@ -218,3 +237,79 @@ export function startServer(
+     });
+   });
+ }
++
++async function handleMutation(
++  req: IncomingMessage,
++  res: ServerResponse,
++  db: Ledger,
++): Promise<void> {
++  try {
++    const host = req.headers.host;
++    if (
++      !host ||
++      !/^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(host) ||
++      (req.headers.origin !== undefined &&
++        req.headers.origin !== `http://${host}`) ||
++      (req.headers["sec-fetch-site"] !== undefined &&
++        !["same-origin", "none"].includes(
++          String(req.headers["sec-fetch-site"]),
++        ))
++    ) {
++      sendJson(res, 403, {
++        error: "Only same-origin local writes are allowed",
++      });
++      return;
++    }
++    if (req.headers["content-type"] !== "application/json") {
++      sendJson(res, 415, { error: "JSON required" });
++      return;
++    }
++    const chunks: Buffer[] = [];
++    let size = 0;
++    for await (const chunk of req) {
++      const bytes = Buffer.from(chunk);
++      size += bytes.length;
++      if (size > 32768) {
++        sendJson(res, 413, { error: "Request too large" });
++        return;
++      }
++      chunks.push(bytes);
++    }
++    const input: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
++    const parts = new URL(req.url!, `http://${host}`).pathname
++      .split("/")
++      .map(decodeURIComponent);
++    let result: unknown;
++    if (parts[2] === "todos")
++      result = parts[3]
++        ? updateTodo(db, parts[3], input)
++        : createTodo(db, input);
++    else {
++      if (!input || typeof input !== "object" || Array.isArray(input))
++        throw new ValidationError("expected an object");
++      const data = input as Record<string, unknown>;
++      if (parts[4] === "complete") {
++        if (Object.keys(data).length)
++          throw new ValidationError("unexpected fields");
++        result = completeActivity(db, parts[3]);
++      } else if (Object.keys(data).length === 1 && "index" in data)
++        result = convertNextStep(db, parts[3], data.index as number);
++      else {
++        if (Object.keys(data).some((key) => key !== "title"))
++          throw new ValidationError("unexpected fields");
++        result = createTodo(db, { title: data.title, entryUid: parts[3] });
++      }
++    }
++    sendJson(res, 200, result);
++  } catch (error) {
++    sendJson(
++      res,
++      error instanceof ValidationError ||
++        error instanceof SyntaxError ||
++        error instanceof URIError
++        ? 400
++        : 500,
++      { error: error instanceof Error ? error.message : "Request failed" },
++    );
++  }
++}
+diff --git a/src/web/locales/en.ts b/src/web/locales/en.ts
+index edc5309..8e02db2 100644
+--- a/src/web/locales/en.ts
++++ b/src/web/locales/en.ts
+@@ -1,6 +1,23 @@
+ import type { LocaleMessages } from "./zh.js";
+ 
+ export const en: LocaleMessages = {
++  savedRefreshError:
++    "Saved, but the list could not refresh. Refresh before retrying.",
++  todos: "Todos",
++  todoTitle: "Todo title",
++  addTodo: "Add Todo",
++  complete: "Mark completed",
++  convertTodo: "Convert to Todo",
++  noTodos: "No Todos",
++  noProject: "No project",
++  sourceEntry: "Source activity",
++  reopen: "Reopen",
++  cancelTodo: "Cancel Todo",
++  todo_open: "Open",
++  todo_completed: "Completed",
++  todo_cancelled: "Cancelled",
++  viewTodos: "View Todos",
++  chooseProject: "Assign project",
+   htmlLang: "en",
+   pageTitle: "Project Manager - Projects & Activity Feed",
+   appTitle: "Project Manager",
+diff --git a/src/web/locales/zh.ts b/src/web/locales/zh.ts
+index 8a26666..f4d560c 100644
+--- a/src/web/locales/zh.ts
++++ b/src/web/locales/zh.ts
+@@ -1,4 +1,20 @@
+ export const zh = {
++  savedRefreshError: "已保存，但列表刷新失败。请先刷新页面，不要重复创建。",
++  todos: "待办",
++  todoTitle: "待办内容",
++  addTodo: "新增待办",
++  complete: "标为已完成",
++  convertTodo: "转为待办",
++  noTodos: "暂无待办",
++  noProject: "不关联项目",
++  sourceEntry: "来源动态",
++  reopen: "重新打开",
++  cancelTodo: "取消待办",
++  todo_open: "待办",
++  todo_completed: "已完成",
++  todo_cancelled: "已取消",
++  viewTodos: "查看待办",
++  chooseProject: "关联项目",
+   htmlLang: "zh-CN",
+   pageTitle: "项目管理 - 项目与动态概览",
+   appTitle: "项目管理",
+diff --git a/src/web/script.ts b/src/web/script.ts
+index 6f57c3f..3120381 100644
+--- a/src/web/script.ts
++++ b/src/web/script.ts
+@@ -3,11 +3,13 @@ import { getClientI18nScript, type Locale } from "./i18n.js";
+ export function getWebUIScript(initialLang: Locale): string {
+   return `${getClientI18nScript(initialLang)}
+ 
++    let todosData = [];
+     let projectsData = [];
+     let historyData = [];
+     let focusedEntry = null;
+     let activeProjectFilter = null;
+     let activeGroupMode = 'grouped';
++    let initialNavigation = true;
+ 
+     function getTodayDateString() {
+       const now = new Date();
+@@ -33,13 +35,15 @@ export function getWebUIScript(initialLang: Locale): string {
+ 
+     async function fetchData() {
+       try {
+-        const [projRes, histRes, statsRes] = await Promise.all([
++        const [projRes, histRes, statsRes, todosRes] = await Promise.all([
+           fetch('/api/projects'),
+           fetch('/api/history?limit=1000'),
+-          fetch('/api/stats')
++          fetch('/api/stats'),
++          fetch('/api/todos')
+         ]);
+ 
+-        if (projRes.ok) projectsData = await projRes.json();
++        if (![projRes, histRes, statsRes, todosRes].every(response => response.ok)) throw new Error(t('entryLoadError'));
++        projectsData = await projRes.json();
+         if (histRes.ok) historyData = await histRes.json();
+         if (statsRes.ok) {
+           const stats = await statsRes.json();
+@@ -48,24 +52,32 @@ export function getWebUIScript(initialLang: Locale): string {
+           document.getElementById('statUpdates').textContent = stats.totalEntries;
+         }
+ 
++        if (!todosRes.ok) throw new Error('Todos unavailable');
++        todosData = await todosRes.json();
+         render();
+         if (typeof location !== 'undefined') {
+           const ref = new URLSearchParams(location.search).get('entry');
+           if (ref) {
+-            switchTab('activity');
++            if (initialNavigation) switchTab('activity');
+             const response = await fetch('/api/entries/' + encodeURIComponent(ref));
+             if (!response.ok) throw new Error('Entry unavailable');
+             focusedEntry = await response.json();
+             render();
+           }
+         }
++        initialNavigation = false;
++        return true;
+       } catch (err) {
++        document.getElementById('actionError').textContent = t('entryLoadError');
+         console.error('Failed to load data', err);
+         document.getElementById('timelineContainer').textContent = t('entryLoadError');
++        return false;
+       }
+     }
+ 
+     function switchTab(tab) {
++      document.getElementById('tabTodos').classList.toggle('active', tab === 'todos');
++      document.getElementById('viewTodos').classList.toggle('active', tab === 'todos');
+       document.getElementById('tabProjects').classList.toggle('active', tab === 'projects');
+       document.getElementById('tabActivity').classList.toggle('active', tab === 'activity');
+       document.getElementById('viewProjects').classList.toggle('active', tab === 'projects');
+@@ -177,7 +189,7 @@ export function getWebUIScript(initialLang: Locale): string {
+             <div class="section-box">
+               <div class="section-title next-steps">\${escapeHtml(t('nextStepsTitle'))}</div>
+               <ul class="bullet-list">
+-                \${item.nextSteps.map(n => \`<li>\${escapeHtml(n)}</li>\`).join('')}
++                \${item.nextSteps.map((n, index) => todosData.some(todo => todo.entryUid === (item.nextStepsSourceUid || item.uid) && todo.stepIndex === index) ? '' : \`<li>\${escapeHtml(n)} <button class="btn btn-sm" data-action="convert-todo" data-entry="\${escapeHtml(item.uid)}" data-index="\${index}">\${escapeHtml(t('convertTodo'))}</button></li>\`).join('')}
+               </ul>
+             </div>
+           \` : ''}
+@@ -197,6 +209,11 @@ export function getWebUIScript(initialLang: Locale): string {
+             </div>
+           \` : ''}
+           \${item.completedBy ? '</details>' : ''}
++          <div class="section-box">
++            <button class="btn" data-action="add-todo" data-entry="\${escapeHtml(item.uid)}">\${escapeHtml(t('addTodo'))}</button>
++            \${status !== 'completed' ? \`<button class="btn" data-action="complete-entry" data-entry="\${escapeHtml(item.uid)}">\${escapeHtml(t('complete'))}</button>\` : ''}
++            \${todosData.filter(todo => todo.entryUid === item.uid || todo.entryUid === item.nextStepsSourceUid).map(renderTodo).join('')}
++          </div>
+         </div>
+       \`;
+     }
+@@ -215,6 +232,7 @@ export function getWebUIScript(initialLang: Locale): string {
+       const query = document.getElementById('searchInput').value.trim().toLowerCase();
+       const selectedDate = document.getElementById('activityDateInput').value;
+ 
++      renderTodos(query);
+       // Render Active Filter Chip
+       const filterBar = document.getElementById('filterBarContainer');
+       const chip = document.getElementById('activeFilterChip');
+@@ -272,6 +290,7 @@ export function getWebUIScript(initialLang: Locale): string {
+               </div>
+               <div class="card-footer">
+                 <span>\${escapeHtml(t('createdLabel'))} \${formatTime(p.createdAt)}</span>
++                <button class="btn" data-action="project-todos" data-project="\${escapeHtml(p.project)}">\${escapeHtml(t('viewTodos'))}</button>
+                 <a class="link-btn" data-action="filter-project" data-project="\${escapeHtml(p.project)}">\${escapeHtml(t('viewActivity'))}</a>
+               </div>
+             </div>
+@@ -353,5 +372,70 @@ export function getWebUIScript(initialLang: Locale): string {
+         .replace(/'/g, '&#039;');
+     }
+ 
++
++    function projectOptions(selected) {
++      return '<option value="">' + escapeHtml(t('noProject')) + '</option>' + projectsData.map(p =>
++        '<option value="' + escapeHtml(p.project) + '"' + (selected === p.project ? ' selected' : '') + '>' + escapeHtml(p.displayName) + '</option>').join('');
++    }
++    function renderTodo(todo) {
++      return '<div class="section-box"><strong>' + escapeHtml(todo.title) + '</strong> · ' + escapeHtml(t('todo_' + todo.status)) +
++        (todo.project ? ' · ' + escapeHtml(todo.project) : '') +
++        (todo.entryUid ? ' <a class="link-btn" href="?entry=' + encodeURIComponent(todo.entryUid) + '">' + escapeHtml(t('sourceEntry')) + '</a>' :
++          ' <label>' + escapeHtml(t('chooseProject')) + ' <select data-todo-project="' + escapeHtml(todo.uid) + '">' + projectOptions(todo.project) + '</select></label>') +
++        ' <button class="btn" data-action="todo-status" data-uid="' + escapeHtml(todo.uid) + '" data-status="' + (todo.status === 'open' ? 'completed' : 'open') + '">' + escapeHtml(t(todo.status === 'open' ? 'complete' : 'reopen')) + '</button>' +
++        (todo.status === 'open' ? ' <button class="btn" data-action="todo-status" data-uid="' + escapeHtml(todo.uid) + '" data-status="cancelled">' + escapeHtml(t('cancelTodo')) + '</button>' : '') + '</div>';
++    }
++    function renderTodos(query) {
++      const select = document.getElementById('todoProject');
++      select.innerHTML = projectOptions(select.value);
++      const todos = todosData.filter(todo => (!activeProjectFilter || todo.project === activeProjectFilter) &&
++        (!query || (todo.title + ' ' + (todo.project || '')).toLowerCase().includes(query)));
++      document.getElementById('todosContainer').innerHTML = todos.length ? todos.map(renderTodo).join('') : '<p>' + escapeHtml(t('noTodos')) + '</p>';
++    }
++    async function mutate(path, data) {
++      const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
++      const result = await response.json();
++      if (!response.ok) throw new Error(result.error || 'Request failed');
++      if (!await fetchData()) { const error = new Error(t('savedRefreshError')); error.saved = true; throw error; }
++    }
++    async function runAction(element, action) {
++      if (element.disabled) return;
++      element.disabled = true;
++      document.getElementById('actionError').textContent = '';
++      try { await action(); }
++      catch (error) { document.getElementById('actionError').textContent = error.message; }
++      finally { element.disabled = false; }
++    }
++    document.getElementById('todoForm').addEventListener('submit', function(event) {
++      event.preventDefault();
++      const button = this.querySelector('button');
++      runAction(button, async () => {
++        try {
++          await mutate('/api/todos', {title: document.getElementById('todoTitle').value, project: document.getElementById('todoProject').value || null});
++          document.getElementById('todoTitle').value = '';
++        } catch (error) {
++          if (error.saved) document.getElementById('todoTitle').value = '';
++          throw error;
++        }
++      });
++    });
++    document.addEventListener('change', function(event) {
++      const select = event.target.closest('[data-todo-project]');
++      if (select) runAction(select, () => mutate('/api/todos/' + select.dataset.todoProject, {project: select.value || null}));
++    });
++    document.addEventListener('click', function(event) {
++      const button = event.target.closest('[data-action]');
++      if (!button) return;
++      const data = button.dataset;
++      if (data.action === 'project-todos') { activeProjectFilter = data.project; switchTab('todos'); render(); document.getElementById('todoProject').value = data.project; return; }
++      if (data.action === 'complete-entry') runAction(button, () => mutate('/api/entries/' + data.entry + '/complete', {}));
++      if (data.action === 'convert-todo') runAction(button, () => mutate('/api/entries/' + data.entry + '/todos', {index: Number(data.index)}));
++      if (data.action === 'todo-status') runAction(button, () => mutate('/api/todos/' + data.uid, {status: data.status}));
++      if (data.action === 'add-todo') {
++        const title = window.prompt(t('todoTitle'));
++        if (title && title.trim()) runAction(button, () => mutate('/api/entries/' + data.entry + '/todos', {title}));
++      }
++    });
++
+     fetchData();`;
+ }
+diff --git a/src/web/ui.ts b/src/web/ui.ts
+index b624a48..1f84ef8 100644
+--- a/src/web/ui.ts
++++ b/src/web/ui.ts
+@@ -53,6 +53,7 @@ ${WEB_UI_STYLES}
+     <div class="nav-tabs">
+       <button class="tab-btn active" id="tabProjects" data-i18n="projects" onclick="switchTab('projects')">${dict.projects}</button>
+       <button class="tab-btn" id="tabActivity" data-i18n="activityFeed" onclick="switchTab('activity')">${dict.activityFeed}</button>
++      <button class="tab-btn" id="tabTodos" data-i18n="todos" onclick="switchTab('todos')">${dict.todos}</button>
+     </div>
+     <button class="btn" id="btnRefresh" data-i18n="refresh" onclick="refreshData()">${dict.refresh}</button>
+   </div>
+@@ -62,6 +63,17 @@ ${WEB_UI_STYLES}
+       <span id="labelFilterByProject" data-i18n="filteringByProject">${dict.filteringByProject}</span> <span id="activeFilterChip" class="filter-chip"></span>
+     </div>
+ 
++    <div id="actionError" role="alert"></div>
++    <div id="viewTodos" class="view-panel">
++      <form id="todoForm" class="section-box">
++        <label for="todoTitle" data-i18n="todoTitle">${dict.todoTitle}</label>
++        <input id="todoTitle" class="search-input" required maxlength="2000" />
++        <label for="todoProject" data-i18n="projects">${dict.projects}</label>
++        <select id="todoProject" class="date-input"></select>
++        <button class="btn" type="submit" data-i18n="addTodo">${dict.addTodo}</button>
++      </form>
++      <div id="todosContainer"></div>
++    </div>
+     <!-- Projects View -->
+     <div id="viewProjects" class="view-panel active">
+       <div id="projectsContainer" class="projects-grid"></div>
+diff --git a/test/completion.test.ts b/test/completion.test.ts
+index 85c40d0..70352e3 100644
+--- a/test/completion.test.ts
++++ b/test/completion.test.ts
+@@ -386,7 +386,7 @@ test("migration adds identities to legacy snapshots without changing content", (
+         n: number;
+       }
+     ).n,
+-    3,
++    4,
+   );
+   raw.close();
+   rmSync(dir, { recursive: true, force: true });
+diff --git a/test/core.test.ts b/test/core.test.ts
+index 3015878..f746b36 100644
+--- a/test/core.test.ts
++++ b/test/core.test.ts
+@@ -211,7 +211,7 @@ test("SQLite ledger migrates, appends, is idempotent, and queries by timeline",
+         count: number;
+       }
+     ).count,
+-    3,
++    4,
+   );
+ 
+   // Test setProjectMetadata & listProjects
+diff --git a/test/server.test.ts b/test/server.test.ts
+index 081bc39..7624bf5 100644
+--- a/test/server.test.ts
++++ b/test/server.test.ts
+@@ -485,6 +485,7 @@ test("getWebUIHTML defaults to Chinese and supports zh/en i18n switching", async
+       addEventListener: () => {},
+     },
+     fetch: async (url: string) => {
++      if (url === "/api/todos") return { ok: true, json: async () => [] };
+       if (url === "/api/projects") {
+         return {
+           ok: true,
+@@ -713,6 +714,37 @@ test("getWebUIHTML defaults to Chinese and supports zh/en i18n switching", async
+   context.fetch = originalFetch;
+   await (context.refreshData as () => Promise<void>)();
+ 
++  // Keep an explicit unassigned form choice through project-filtered renders.
++  runInNewContext("activeProjectFilter = 'alpha';", context);
++  getElement("todoProject").value = "";
++  (context.render as () => void)();
++  assert.doesNotMatch(
++    getElement("todoProject").innerHTML,
++    /value="alpha" selected/,
++  );
++  runInNewContext("activeProjectFilter = null;", context);
++  context.fetch = async (url: string) =>
++    url === "/api/todos" ? { ok: false } : originalFetch(url);
++  await (context.fetchData as () => Promise<void>)();
++  assert.equal(
++    getElement("actionError").textContent,
++    "Could not load activity. Please retry.",
++  );
++  context.fetch = async (url: string, options?: { method: string }) =>
++    options?.method === "POST"
++      ? { ok: true, json: async () => ({}) }
++      : url === "/api/todos"
++        ? { ok: false }
++        : originalFetch(url);
++  await assert.rejects(
++    (context.mutate as (path: string, data: unknown) => Promise<void>)(
++      "/api/todos",
++      { title: "saved" },
++    ),
++    /Saved, but/,
++  );
++  context.fetch = originalFetch;
++
+   // Verify pre-seeded localStorage ("en") and throwing localStorage fallback
+   storage.set("pmgr_lang", "en");
+   runInNewContext(scriptMatch[1], { ...context });

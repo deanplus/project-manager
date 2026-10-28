@@ -386,7 +386,7 @@ test("migration adds identities to legacy snapshots without changing content", (
         n: number;
       }
     ).n,
-    3,
+    4,
   );
   raw.close();
   rmSync(dir, { recursive: true, force: true });

@@ -53,6 +53,7 @@ ${WEB_UI_STYLES}
     <div class="nav-tabs">
       <button class="tab-btn active" id="tabProjects" data-i18n="projects" onclick="switchTab('projects')">${dict.projects}</button>
       <button class="tab-btn" id="tabActivity" data-i18n="activityFeed" onclick="switchTab('activity')">${dict.activityFeed}</button>
+      <button class="tab-btn" id="tabTodos" data-i18n="todos" onclick="switchTab('todos')">${dict.todos}</button>
     </div>
     <button class="btn" id="btnRefresh" data-i18n="refresh" onclick="refreshData()">${dict.refresh}</button>
   </div>
@@ -62,6 +63,17 @@ ${WEB_UI_STYLES}
       <span id="labelFilterByProject" data-i18n="filteringByProject">${dict.filteringByProject}</span> <span id="activeFilterChip" class="filter-chip"></span>
     </div>
 
+    <div id="actionError" role="alert"></div>
+    <div id="viewTodos" class="view-panel">
+      <form id="todoForm" class="section-box">
+        <label for="todoTitle" data-i18n="todoTitle">${dict.todoTitle}</label>
+        <input id="todoTitle" class="search-input" required maxlength="2000" />
+        <label for="todoProject" data-i18n="projects">${dict.projects}</label>
+        <select id="todoProject" class="date-input"></select>
+        <button class="btn" type="submit" data-i18n="addTodo">${dict.addTodo}</button>
+      </form>
+      <div id="todosContainer"></div>
+    </div>
     <!-- Projects View -->
     <div id="viewProjects" class="view-panel active">
       <div id="projectsContainer" class="projects-grid"></div>

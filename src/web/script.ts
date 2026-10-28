@@ -3,11 +3,13 @@ import { getClientI18nScript, type Locale } from "./i18n.js";
 export function getWebUIScript(initialLang: Locale): string {
   return `${getClientI18nScript(initialLang)}
 
+    let todosData = [];
     let projectsData = [];
     let historyData = [];
     let focusedEntry = null;
     let activeProjectFilter = null;
     let activeGroupMode = 'grouped';
+    let initialNavigation = true;
 
     function getTodayDateString() {
       const now = new Date();
@@ -33,13 +35,15 @@ export function getWebUIScript(initialLang: Locale): string {
 
     async function fetchData() {
       try {
-        const [projRes, histRes, statsRes] = await Promise.all([
+        const [projRes, histRes, statsRes, todosRes] = await Promise.all([
           fetch('/api/projects'),
           fetch('/api/history?limit=1000'),
-          fetch('/api/stats')
+          fetch('/api/stats'),
+          fetch('/api/todos')
         ]);
 
-        if (projRes.ok) projectsData = await projRes.json();
+        if (![projRes, histRes, statsRes, todosRes].every(response => response.ok)) throw new Error(t('entryLoadError'));
+        projectsData = await projRes.json();
         if (histRes.ok) historyData = await histRes.json();
         if (statsRes.ok) {
           const stats = await statsRes.json();
@@ -48,24 +52,32 @@ export function getWebUIScript(initialLang: Locale): string {
           document.getElementById('statUpdates').textContent = stats.totalEntries;
         }
 
+        if (!todosRes.ok) throw new Error('Todos unavailable');
+        todosData = await todosRes.json();
         render();
         if (typeof location !== 'undefined') {
           const ref = new URLSearchParams(location.search).get('entry');
           if (ref) {
-            switchTab('activity');
+            if (initialNavigation) switchTab('activity');
             const response = await fetch('/api/entries/' + encodeURIComponent(ref));
             if (!response.ok) throw new Error('Entry unavailable');
             focusedEntry = await response.json();
             render();
           }
         }
+        initialNavigation = false;
+        return true;
       } catch (err) {
+        document.getElementById('actionError').textContent = t('entryLoadError');
         console.error('Failed to load data', err);
         document.getElementById('timelineContainer').textContent = t('entryLoadError');
+        return false;
       }
     }
 
     function switchTab(tab) {
+      document.getElementById('tabTodos').classList.toggle('active', tab === 'todos');
+      document.getElementById('viewTodos').classList.toggle('active', tab === 'todos');
       document.getElementById('tabProjects').classList.toggle('active', tab === 'projects');
       document.getElementById('tabActivity').classList.toggle('active', tab === 'activity');
       document.getElementById('viewProjects').classList.toggle('active', tab === 'projects');
@@ -177,7 +189,7 @@ export function getWebUIScript(initialLang: Locale): string {
             <div class="section-box">
               <div class="section-title next-steps">\${escapeHtml(t('nextStepsTitle'))}</div>
               <ul class="bullet-list">
-                \${item.nextSteps.map(n => \`<li>\${escapeHtml(n)}</li>\`).join('')}
+                \${item.nextSteps.map((n, index) => todosData.some(todo => todo.entryUid === (item.nextStepsSourceUid || item.uid) && todo.stepIndex === index) ? '' : \`<li>\${escapeHtml(n)} <button class="btn btn-sm" data-action="convert-todo" data-entry="\${escapeHtml(item.uid)}" data-index="\${index}">\${escapeHtml(t('convertTodo'))}</button></li>\`).join('')}
               </ul>
             </div>
           \` : ''}
@@ -197,6 +209,11 @@ export function getWebUIScript(initialLang: Locale): string {
             </div>
           \` : ''}
           \${item.completedBy ? '</details>' : ''}
+          <div class="section-box">
+            <button class="btn" data-action="add-todo" data-entry="\${escapeHtml(item.uid)}">\${escapeHtml(t('addTodo'))}</button>
+            \${status !== 'completed' ? \`<button class="btn" data-action="complete-entry" data-entry="\${escapeHtml(item.uid)}">\${escapeHtml(t('complete'))}</button>\` : ''}
+            \${todosData.filter(todo => todo.entryUid === item.uid || todo.entryUid === item.nextStepsSourceUid).map(renderTodo).join('')}
+          </div>
         </div>
       \`;
     }
@@ -215,6 +232,7 @@ export function getWebUIScript(initialLang: Locale): string {
       const query = document.getElementById('searchInput').value.trim().toLowerCase();
       const selectedDate = document.getElementById('activityDateInput').value;
 
+      renderTodos(query);
       // Render Active Filter Chip
       const filterBar = document.getElementById('filterBarContainer');
       const chip = document.getElementById('activeFilterChip');
@@ -272,6 +290,7 @@ export function getWebUIScript(initialLang: Locale): string {
               </div>
               <div class="card-footer">
                 <span>\${escapeHtml(t('createdLabel'))} \${formatTime(p.createdAt)}</span>
+                <button class="btn" data-action="project-todos" data-project="\${escapeHtml(p.project)}">\${escapeHtml(t('viewTodos'))}</button>
                 <a class="link-btn" data-action="filter-project" data-project="\${escapeHtml(p.project)}">\${escapeHtml(t('viewActivity'))}</a>
               </div>
             </div>
@@ -352,6 +371,71 @@ export function getWebUIScript(initialLang: Locale): string {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
     }
+
+
+    function projectOptions(selected) {
+      return '<option value="">' + escapeHtml(t('noProject')) + '</option>' + projectsData.map(p =>
+        '<option value="' + escapeHtml(p.project) + '"' + (selected === p.project ? ' selected' : '') + '>' + escapeHtml(p.displayName) + '</option>').join('');
+    }
+    function renderTodo(todo) {
+      return '<div class="section-box"><strong>' + escapeHtml(todo.title) + '</strong> · ' + escapeHtml(t('todo_' + todo.status)) +
+        (todo.project ? ' · ' + escapeHtml(todo.project) : '') +
+        (todo.entryUid ? ' <a class="link-btn" href="?entry=' + encodeURIComponent(todo.entryUid) + '">' + escapeHtml(t('sourceEntry')) + '</a>' :
+          ' <label>' + escapeHtml(t('chooseProject')) + ' <select data-todo-project="' + escapeHtml(todo.uid) + '">' + projectOptions(todo.project) + '</select></label>') +
+        ' <button class="btn" data-action="todo-status" data-uid="' + escapeHtml(todo.uid) + '" data-status="' + (todo.status === 'open' ? 'completed' : 'open') + '">' + escapeHtml(t(todo.status === 'open' ? 'complete' : 'reopen')) + '</button>' +
+        (todo.status === 'open' ? ' <button class="btn" data-action="todo-status" data-uid="' + escapeHtml(todo.uid) + '" data-status="cancelled">' + escapeHtml(t('cancelTodo')) + '</button>' : '') + '</div>';
+    }
+    function renderTodos(query) {
+      const select = document.getElementById('todoProject');
+      select.innerHTML = projectOptions(select.value);
+      const todos = todosData.filter(todo => (!activeProjectFilter || todo.project === activeProjectFilter) &&
+        (!query || (todo.title + ' ' + (todo.project || '')).toLowerCase().includes(query)));
+      document.getElementById('todosContainer').innerHTML = todos.length ? todos.map(renderTodo).join('') : '<p>' + escapeHtml(t('noTodos')) + '</p>';
+    }
+    async function mutate(path, data) {
+      const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Request failed');
+      if (!await fetchData()) { const error = new Error(t('savedRefreshError')); error.saved = true; throw error; }
+    }
+    async function runAction(element, action) {
+      if (element.disabled) return;
+      element.disabled = true;
+      document.getElementById('actionError').textContent = '';
+      try { await action(); }
+      catch (error) { document.getElementById('actionError').textContent = error.message; }
+      finally { element.disabled = false; }
+    }
+    document.getElementById('todoForm').addEventListener('submit', function(event) {
+      event.preventDefault();
+      const button = this.querySelector('button');
+      runAction(button, async () => {
+        try {
+          await mutate('/api/todos', {title: document.getElementById('todoTitle').value, project: document.getElementById('todoProject').value || null});
+          document.getElementById('todoTitle').value = '';
+        } catch (error) {
+          if (error.saved) document.getElementById('todoTitle').value = '';
+          throw error;
+        }
+      });
+    });
+    document.addEventListener('change', function(event) {
+      const select = event.target.closest('[data-todo-project]');
+      if (select) runAction(select, () => mutate('/api/todos/' + select.dataset.todoProject, {project: select.value || null}));
+    });
+    document.addEventListener('click', function(event) {
+      const button = event.target.closest('[data-action]');
+      if (!button) return;
+      const data = button.dataset;
+      if (data.action === 'project-todos') { activeProjectFilter = data.project; switchTab('todos'); render(); document.getElementById('todoProject').value = data.project; return; }
+      if (data.action === 'complete-entry') runAction(button, () => mutate('/api/entries/' + data.entry + '/complete', {}));
+      if (data.action === 'convert-todo') runAction(button, () => mutate('/api/entries/' + data.entry + '/todos', {index: Number(data.index)}));
+      if (data.action === 'todo-status') runAction(button, () => mutate('/api/todos/' + data.uid, {status: data.status}));
+      if (data.action === 'add-todo') {
+        const title = window.prompt(t('todoTitle'));
+        if (title && title.trim()) runAction(button, () => mutate('/api/entries/' + data.entry + '/todos', {title}));
+      }
+    });
 
     fetchData();`;
 }

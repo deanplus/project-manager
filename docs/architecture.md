@@ -102,3 +102,25 @@ Exports have no record limit and read raw snapshots directly in oldest-to-newest
 History/current/detail reads return original status, effective status, recency, and completion evidence independently of pagination/date filters. `at` retains snapshot-only semantics. Cards display Completed plus a navigable source while retaining original details. The project current state still comes from the latest snapshot.
 
 Migration 3 backfills random UUIDs and rejects inserts lacking a UUID, so old writers fail explicitly instead of creating unreadable records. Independently migrated copies of legacy data have different UUIDs; importing across them may fail on an existing external reference. There is no automatic identity adoption or cross-database reconciliation. Export from one authoritative ledger and restore into a fresh database when migrating.
+
+## Independent Todos (migration 4)
+
+`todos` stores stable UUIDs, title, optional project/source UUID, optional legacy
+step index, status, creation time, and completion time. Source links constrain
+project ownership. A unique source/index pair makes conversion retry-safe.
+New `addStatus` calls create next-step Todos in the same transaction; imports do
+not implicitly create work. Todos are editable current state, while activity
+snapshots and their completion events remain append-only. Version-3 bundles
+include Todos; conflicts reject the entire import rather than overwrite changes.
+
+The local dashboard exposes JSON POST routes for Todo creation/update, explicit
+step conversion, and activity completion. Activity completion appends a follow-up
+retaining current project status and links the original activity. Todo state is
+independent. Mutations reject non-local Host headers, cross-origin requests,
+non-JSON bodies, and bodies exceeding 32 KiB.
+
+Completion follow-ups preserve all current snapshot context. Their optional
+`nextStepsSourceUid` points directly to the earlier original next-step source
+(same project and identical text). UI rendering and server-side conversion reuse
+that source's Todos, including after export/import; copying context never creates
+a second conversion identity.

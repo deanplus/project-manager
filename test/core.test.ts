@@ -211,7 +211,7 @@ test("SQLite ledger migrates, appends, is idempotent, and queries by timeline", 
         count: number;
       }
     ).count,
-    3,
+    4,
   );
 
   // Test setProjectMetadata & listProjects

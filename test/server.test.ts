@@ -485,6 +485,7 @@ test("getWebUIHTML defaults to Chinese and supports zh/en i18n switching", async
       addEventListener: () => {},
     },
     fetch: async (url: string) => {
+      if (url === "/api/todos") return { ok: true, json: async () => [] };
       if (url === "/api/projects") {
         return {
           ok: true,
@@ -712,6 +713,37 @@ test("getWebUIHTML defaults to Chinese and supports zh/en i18n switching", async
   context.location = { search: "" };
   context.fetch = originalFetch;
   await (context.refreshData as () => Promise<void>)();
+
+  // Keep an explicit unassigned form choice through project-filtered renders.
+  runInNewContext("activeProjectFilter = 'alpha';", context);
+  getElement("todoProject").value = "";
+  (context.render as () => void)();
+  assert.doesNotMatch(
+    getElement("todoProject").innerHTML,
+    /value="alpha" selected/,
+  );
+  runInNewContext("activeProjectFilter = null;", context);
+  context.fetch = async (url: string) =>
+    url === "/api/todos" ? { ok: false } : originalFetch(url);
+  await (context.fetchData as () => Promise<void>)();
+  assert.equal(
+    getElement("actionError").textContent,
+    "Could not load activity. Please retry.",
+  );
+  context.fetch = async (url: string, options?: { method: string }) =>
+    options?.method === "POST"
+      ? { ok: true, json: async () => ({}) }
+      : url === "/api/todos"
+        ? { ok: false }
+        : originalFetch(url);
+  await assert.rejects(
+    (context.mutate as (path: string, data: unknown) => Promise<void>)(
+      "/api/todos",
+      { title: "saved" },
+    ),
+    /Saved, but/,
+  );
+  context.fetch = originalFetch;
 
   // Verify pre-seeded localStorage ("en") and throwing localStorage fallback
   storage.set("pmgr_lang", "en");
