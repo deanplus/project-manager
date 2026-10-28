@@ -127,6 +127,18 @@ pnpm start history --project test-project
 
 自动化测试会使用内存数据库或系统临时目录中的 SQLite 文件，不会读写默认数据库。`PMGR_DB_PATH=:memory:` 也可用于单条命令，但每个 CLI 命令都是独立进程，命令结束后数据就会消失，不适合连续手工测试。
 
+## CLI 帮助与版本
+
+```bash
+pmgr                    # 显示通用帮助
+pmgr -h                 # 也可使用 --help 或 help
+pmgr add --help          # 命令用法与可用选项
+pmgr help history       # 等价于 history -h
+pmgr -v                 # 也可使用 -V、--version 或 version
+```
+
+帮助与版本命令会成功退出，且不会打开或创建数据库。版本输出来自已安装包的元数据。也支持兼容形式 `pmgr status <command> --help`。
+
 ## 快速开始
 
 追加一条项目状态：
@@ -186,7 +198,7 @@ pnpm start at \
 - `--external-ref`：全局幂等键。重复写入同一项目时返回原记录；若被其他项目占用则报错。
 - `--json`：输出稳定 JSON。
 
-## 项目元数据与模糊查询
+### 项目元数据与模糊查询
 
 可通过 `set-project` 设置或更新项目的名称、简介与备注，或使用 `--clear-description` / `--clear-notes` 清空：
 
@@ -298,3 +310,44 @@ pnpm build
 ```
 
 Statements、branches、functions、lines 的覆盖率门槛均为 100%。详细设计见[架构文档](docs/architecture.md)。
+
+## 补全更早的动态
+
+项目状态和动态是否完成是两回事。关联条目前，先查看 `pmgr history --project demo --json`。`status` 是原始快照；`effectiveStatus` 计入显式的后续完成；`isCurrent` 标识该项目的最新快照。缺少 `completedBy` 并不表示这条动态尚未完成。
+
+```bash
+# 一次更新可完成多条更早的记录（本地数字 ID 或可移植 UUID）。
+pmgr add --project demo --status active --summary "部署已验收" \
+  --completes 12 --completes 15 --source agent --json
+# 关联一条已有的后续记录，或不删除历史地纠正错误关联。
+pmgr complete --entry 12 --by 18 --source agent --json
+pmgr revoke-completion --entry 12 --by 18 --reason "验收仍未完成" --source agent --json
+```
+
+只关联那些全部未完成工作（包括阻塞和下一步）都已解决的条目。同一项目内的关联要求后续记录的发生时间严格更晚；发生时间相同的关联会被拒绝。每个目标只能有一个有效的完成来源。重复同一关联是空操作；要替换时需先撤销。`add --completes` 会原子写入快照、元数据和关联。已有历史不会自动对账。
+
+动态卡片会显示已完成，并链到后续动态；原始详情保留在可展开的「原始记录」中。「当前状态」和「已有后续更新」只表示快照新旧，与是否完成相互独立。`/api/entries/<id-or-uid>` 和 `/?entry=<uid>` 即使不在初始动态页，也能打开一条记录。日期筛选选择的是快照；完成标注反映的是当前结果。`at` 仍然返回不含完成信息的历史项目快照；按历史时点查询完成状态暂不支持。
+
+导出现在会输出 version 2 包 `{ "version": 2, "entries": [...], "completions": [...] }`。JSONL 每行输出一个完整包。条目保留 UUID 和记录时间；事件保留 UUID，以及每个目标的前驱链接（含撤销）。导入同时接受旧版条目对象、数组、JSONL 和 version 2 包，会检查身份冲突，并按文件原子应用。重复导入同一包是幂等的。事件顺序有意义：须按导出顺序导入；历史不一致时导入失败，不会静默合并。旧客户端无法导入 version 2 包。迁移会给已有快照补上 UUID，不改变其内容。
+
+各自独立迁移的旧数据副本会得到不同的 UUID。跨库导入可能因已存在的 `externalRef` 失败，不会隐式沿用对方身份。要忠实迁移，请把包恢复到一个全新数据库。省略 UUID 的旧写入会被拒绝。若 `externalRef` 已存在，`add` 会保留原快照，并把显式传入的 `--completes` 关联应用到该快照；相同且仍然有效的关联是空操作。事后补关联请使用 `complete`，让对账显式发生。
+
+### 待办与仪表板操作
+
+新的 `add --next` 会创建独立待办，并关联到这条新动态。
+历史中的下一步仍只是文本，直到在仪表板里显式转为待办。
+待办页支持单独创建、可选关联项目、查看来源动态、标为已完成、取消和重新打开。项目卡片可以筛选这份列表。
+动态卡片提供 **标为已完成**，会用当前项目状态记一条后续动态；这既不会把项目标成完成，也不会完成它的待办。
+
+```sh
+pmgr todo-add --title "复查结果" --project demo --json
+pmgr todo-add --title "未归属的想法" --json
+pmgr todos --project demo --json
+pmgr todo-update --uid <todo-uuid> --status completed --json
+```
+
+带待办的导出使用 version 3，并保留待办的身份与状态；
+version 2 和旧版导入仍然可用，且不会把旧的下一步文本自动变成新待办。
+冲突的待办快照会在导入时整批拒绝。
+仪表板写入仅接受同源的 localhost JSON 请求；
+绑定到远程主机时，仪表板保持只读。
