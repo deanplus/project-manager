@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0 - 2026-10-29
+
+### Added
+
+- Store new snapshot next work as `nextTodoUids` references. `add --next` creates Todos and those refs in one transaction; `add --next-todo` pins existing UIDs.
+- Reject mixed prose and refs, duplicate UIDs, combining `--next` with `--next-todo`, cross-project refs, and project changes that conflict with any historical reference.
+- Export version 4 carries refs and every Todo they need, including unassigned Todos referenced by a project export.
+- `todos --status open` lists open work. With `--project`, current snapshot pins are ordered first.
+- Dashboard activity history and project cards show referenced Todos with live status.
+
+### Changed
+
+- New snapshots no longer persist next-step prose. Legacy string `nextSteps` stay readable. Per-index conversion does not rewrite history; completion copies the full string list until every source index has a Todo, then materializes refs without creating Todos or changing their status.
+
+### Fixed
+
+- Detach the dashboard browser launch so a long-lived browser does not keep the process alive.
+- Reject dangling and cross-project `nextTodoUids` from `importStatuses`, and require imported refs to name Todos in the same payload. Entry-only imports declare no Todos, so they cannot reference existing rows.
+- Treat a fixed-UID retry of `--next` text as the same write after it has been stored as refs. Portable imports still require an exact snapshot match.
+
 ## 0.4.0 - 2026-10-28
 
 ### Added

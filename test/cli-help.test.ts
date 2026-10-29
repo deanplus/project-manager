@@ -45,6 +45,8 @@ test("help and version do not open the ledger; aliases and command help work", (
       assert.equal(execute(["-h", action]), output);
     }
     assert.match(execute(["add", "-h"]), /--completes <value> \(repeatable\)/);
+    assert.match(execute(["add", "-h"]), /--next-todo <value> \(repeatable\)/);
+    assert.match(execute(["todos", "--help"]), /--status <value>/);
     const { version } = JSON.parse(
       readFileSync(new URL("../package.json", import.meta.url), "utf8"),
     );

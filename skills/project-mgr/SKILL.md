@@ -64,8 +64,10 @@ pmgr list --query "keyword" --json
 pmgr serve --port 3000 --no-open --json
 
 # Record a completed milestone while the project remains active.
+# --next creates Todos and stores their UIDs on the snapshot. Reuse work with --next-todo.
 pmgr add --project my-project --status active --summary "Implemented the CLI" \
   --progress "Tests pass" --next "Publish the package" --source agent --json
+pmgr todos --project my-project --status open --json
 
 # Same project, with a tag naming the sub-project this snapshot covers.
 pmgr add --project acme --status active --summary "Shipped the web dashboard" \
@@ -92,4 +94,4 @@ When this update resolves all commitments of earlier entries (including blockers
 
 Use `complete --entry <id-or-uid> --by <id-or-uid> --source agent` for an existing follow-up. Use `revoke-completion --entry <id-or-uid> --by <id-or-uid> --reason "..." --source agent` to correct a mistaken link. Links require the same project and strictly increasing occurrence times. Query the affected history afterward to verify effective completion. Do not bulk-close old entries without evidence.
 
-Export produces version-2 bundles (one bundle per line for JSONL), preserving entry/event identities and audit history; legacy imports remain supported. `at` has no completion annotations. Project current state still comes from the latest snapshot.
+Export produces a version-2 bundle when there are no Todos or refs, version 3 when Todos exist without refs, and version 4 when snapshots store `nextTodoUids` (one bundle per line for JSONL). Legacy imports remain supported and do not create Todos. Open work is `todos --status open`; current `nextTodoUids` only order that project's open items. Do not combine `--next` with `--next-todo`. Repeating `--next` text on a later snapshot creates a new Todo; pass existing UIDs to keep the same work. Cancelling or completing a Todo is `todo-update`, not deleting text from a snapshot. `at` has no completion annotations and does not resolve live Todo status. Project current state still comes from the latest snapshot.

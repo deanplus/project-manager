@@ -47,6 +47,7 @@ Key `status_entries` fields:
 | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `status`, `summary`, `progress`                                   | Status enum, summary, and completed work                                                 |
 | `blockers_json`, `next_steps_json`, `decisions_json`, `tags_json` | JSON-encoded string arrays                                                               |
+| `next_todo_uids_json`                                             | NULL for legacy snapshots; a JSON UID array (including `[]`) for ref snapshots           |
 | `occurred_at`                                                     | When the status actually occurred, supplied by the caller or generated during validation |
 | `recorded_at`                                                     | When the database actually wrote the entry                                               |
 | `source`                                                          | `human`, `agent`, or `import`                                                            |
@@ -56,7 +57,7 @@ The `project_id, occurred_at DESC, id DESC` index supports current-status and hi
 
 ## Initialization and migrations
 
-After opening the database, `openLedger()` enables foreign keys, creates the migration table, and checks for and applies migrations 1 through 3 within a `BEGIN IMMEDIATE` transaction. The immediate transaction prevents migration checks and writes from interleaving when several local processes open the database for the first time at once.
+After opening the database, `openLedger()` enables foreign keys, creates the migration table, and checks for and applies migrations 1 through 5 within a `BEGIN IMMEDIATE` transaction. The immediate transaction prevents migration checks and writes from interleaving when several local processes open the database for the first time at once.
 
 The database path is read from `PMGR_DB_PATH` first; otherwise, it uses the absolute path `~/.local/share/project-mgr/project-mgr.sqlite`, resolved from the current user's home directory. Non-memory databases create their parent directory automatically.
 
@@ -108,10 +109,13 @@ Migration 3 backfills random UUIDs and rejects inserts lacking a UUID, so old wr
 `todos` stores stable UUIDs, title, optional project/source UUID, optional legacy
 step index, status, creation time, and completion time. Source links constrain
 project ownership. A unique source/index pair makes conversion retry-safe.
-New `addStatus` calls create next-step Todos in the same transaction; imports do
-not implicitly create work. Todos are editable current state, while activity
-snapshots and their completion events remain append-only. Version-3 bundles
-include Todos; conflicts reject the entire import rather than overwrite changes.
+New `addStatus` calls with `--next` text create Todos and `nextTodoUids` in the
+same transaction and leave string `nextSteps` empty. Imports do not implicitly
+create work. Legacy rows keep string `nextSteps` and leave `next_todo_uids_json`
+NULL. Todos are editable current state, while activity snapshots and their
+completion events remain append-only. Version-3 bundles include Todos without
+refs. Version-4 bundles also carry `nextTodoUids`. Conflicts, dangling refs,
+and cross-project refs reject the entire import rather than overwrite changes.
 
 The local dashboard exposes JSON POST routes for Todo creation/update, explicit
 step conversion, and activity completion. Activity completion appends a follow-up
@@ -119,8 +123,14 @@ retaining current project status and links the original activity. Todo state is
 independent. Mutations reject non-local Host headers, cross-origin requests,
 non-JSON bodies, and bodies exceeding 32 KiB.
 
-Completion follow-ups preserve all current snapshot context. Their optional
-`nextStepsSourceUid` points directly to the earlier original next-step source
-(same project and identical text). UI rendering and server-side conversion reuse
-that source's Todos, including after export/import; copying context never creates
-a second conversion identity.
+Completion follow-ups preserve all current snapshot context. If the latest
+snapshot already stores `nextTodoUids`, the follow-up copies that list and does
+not create Todos. If it still has legacy strings, the follow-up copies the full
+original list and `nextStepsSourceUid` until every source index has a Todo, then
+writes refs in that index order without changing Todo status. `nextStepsSourceUid`
+points directly at the original string source (same project and identical text).
+UI rendering and server-side conversion reuse that source's Todos, including
+after export/import; copying context never creates a second conversion identity.
+
+`current` and `history` add `nextTodos`, a live resolution of stored refs.
+`at` returns the stored snapshot only, so resolved titles there are not historical.

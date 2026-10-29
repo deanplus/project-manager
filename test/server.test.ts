@@ -612,6 +612,67 @@ test("getWebUIHTML defaults to Chinese and supports zh/en i18n switching", async
   assert.match(card, /&lt;script&gt;/);
   assert.match(card, /<details>/);
   assert.match(card, /Original detail/);
+  const pinnedUid = "11111111-1111-4111-8111-111111111111";
+  runInNewContext(
+    `todosData = [{uid: ${JSON.stringify(pinnedUid)}, title: "Ship", status: "open", project: "alpha"}];`,
+    context,
+  );
+  const pinnedCard = renderItem({
+    uid: "pinned-entry",
+    project: "alpha",
+    status: "active",
+    source: "agent",
+    summary: "Pinned",
+    nextSteps: [],
+    nextTodoUids: [pinnedUid],
+    tags: [],
+    occurredAt: "2026-08-07T00:00:00Z",
+  });
+  assert.match(pinnedCard, /Ship/);
+  assert.match(pinnedCard, new RegExp(pinnedUid));
+  assert.doesNotMatch(pinnedCard, /convert-todo/);
+  const embeddedUid = "22222222-2222-4222-8222-222222222222";
+  assert.match(
+    renderItem({
+      uid: "embedded-entry",
+      project: "alpha",
+      status: "active",
+      source: "agent",
+      summary: "Embedded",
+      nextSteps: [],
+      nextTodoUids: [embeddedUid],
+      nextTodos: [
+        {
+          uid: embeddedUid,
+          title: "Embedded",
+          status: "completed",
+          project: "alpha",
+        },
+      ],
+      tags: [],
+      occurredAt: "2026-08-07T00:00:00Z",
+    }),
+    /Embedded/,
+  );
+  assert.match(
+    renderItem({
+      uid: "bare-entry",
+      project: "alpha",
+      status: "active",
+      source: "agent",
+      summary: "Bare",
+      nextSteps: [],
+      nextTodoUids: [embeddedUid],
+      tags: [],
+      occurredAt: "2026-08-07T00:00:00Z",
+    }),
+    new RegExp(embeddedUid),
+  );
+  runInNewContext(
+    `projectsData[0].latestStatus.nextTodos = [{uid: ${JSON.stringify(pinnedUid)}, title: "Ship", status: "open", project: "alpha"}]; render();`,
+    context,
+  );
+  assert.match(getElement("projectsContainer").innerHTML, /Ship/);
   runInNewContext(
     "focusedEntry = " + JSON.stringify(completedItem) + "; render();",
     context,

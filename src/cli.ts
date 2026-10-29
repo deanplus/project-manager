@@ -34,7 +34,14 @@ const booleanFlags = new Set([
   "help",
   "version",
 ]);
-const repeats = new Set(["next", "blocker", "decision", "tag", "completes"]);
+const repeats = new Set([
+  "next",
+  "next-todo",
+  "blocker",
+  "decision",
+  "tag",
+  "completes",
+]);
 
 function parse(argv: string[]): { command: string[]; flags: Flags } {
   const command: string[] = [];
@@ -82,6 +89,7 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
       "progress",
       "blocker",
       "next",
+      "next-todo",
       "decision",
       "tag",
       "at",
@@ -92,7 +100,7 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
     ]),
   ],
   ["todo-add", new Set(["title", "project", "entry", "json"])],
-  ["todos", new Set(["project", "json"])],
+  ["todos", new Set(["project", "status", "json"])],
   ["todo-update", new Set(["uid", "status", "project", "json"])],
   ["complete", new Set(["entry", "by", "reason", "source", "json"])],
   ["revoke-completion", new Set(["entry", "by", "reason", "source", "json"])],
@@ -126,14 +134,17 @@ const commandHelp: Record<string, [string, string]> = {
     "Create an independent or linked Todo",
     "--title <text> [--project <name>] [--entry <uid>] [--json]",
   ],
-  todos: ["List Todos", "[--project <name>] [--json]"],
+  todos: [
+    "List Todos",
+    "[--project <name>] [--status open|completed|cancelled] [--json]",
+  ],
   "todo-update": [
     "Change Todo status or assign a project",
     "--uid <uuid> [--status open|completed|cancelled] [--project <name>] [--json]",
   ],
   add: [
     "Append a status snapshot",
-    "--project <name> --summary <text> [options]",
+    "--project <name> --summary <text> [--next <text> | --next-todo <uid>] [options]",
   ],
   complete: [
     "Link a completed activity to its follow-up",
@@ -367,7 +378,23 @@ export function run(
         );
         break;
       case "todos": {
-        const todos = listTodos(db, stringFlag(flags, "project"));
+        const status = stringFlag(flags, "status");
+        if (
+          status !== undefined &&
+          status !== "open" &&
+          status !== "completed" &&
+          status !== "cancelled"
+        )
+          throw new ValidationError(
+            "--status must be open, completed, or cancelled",
+          );
+        const todos = listTodos(
+          db,
+          stringFlag(flags, "project"),
+          status === undefined
+            ? {}
+            : { status: status as "open" | "completed" | "cancelled" },
+        );
         if (json) output(todos, true, write);
         else
           write(
@@ -393,6 +420,10 @@ export function run(
         const project = stringFlag(flags, "project", true) as string;
         const description = stringFlag(flags, "description");
         const notes = stringFlag(flags, "notes");
+        const next = listFlag(flags, "next");
+        const nextTodo = listFlag(flags, "next-todo");
+        if (next.length > 0 && nextTodo.length > 0)
+          throw new ValidationError("cannot combine --next and --next-todo");
         const result = db
           .transaction(() => {
             if (description !== undefined || notes !== undefined) {
@@ -406,7 +437,8 @@ export function run(
                 summary: stringFlag(flags, "summary", true),
                 progress: stringFlag(flags, "progress"),
                 blockers: listFlag(flags, "blocker"),
-                nextSteps: listFlag(flags, "next"),
+                nextSteps: next,
+                ...(nextTodo.length > 0 ? { nextTodoUids: nextTodo } : {}),
                 decisions: listFlag(flags, "decision"),
                 tags: listFlag(flags, "tag"),
                 occurredAt: stringFlag(flags, "at"),

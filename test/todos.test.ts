@@ -34,6 +34,14 @@ test("Todos are independent, source-linked, idempotent, portable, and leave hist
       externalRef: "retry",
     }).entry;
     assert.equal(listTodos(db).length, 2);
+    assert.deepEqual(entry.nextSteps, []);
+    assert.deepEqual(
+      entry.nextTodoUids,
+      listTodos(db)
+        .slice()
+        .sort((left, right) => (left.stepIndex ?? 0) - (right.stepIndex ?? 0))
+        .map((todo) => todo.uid),
+    );
     addStatus(db, {
       project: "demo",
       summary: "Retry",
@@ -41,9 +49,9 @@ test("Todos are independent, source-linked, idempotent, portable, and leave hist
       externalRef: "retry",
     });
     assert.equal(listTodos(db).length, 2);
-    assert.equal(
-      convertNextStep(db, entry.uid, 0).uid,
-      listTodos(db).find((t) => t.stepIndex === 0)!.uid,
+    assert.throws(
+      () => convertNextStep(db, entry.uid, 0),
+      /next step not found/,
     );
     const free = createTodo(db, { title: "Standalone" });
     assert.equal(free.project, null);
@@ -274,21 +282,25 @@ test("completing an older activity preserves current project context without dup
       "progress",
       "blockers",
       "nextSteps",
+      "nextTodoUids",
       "decisions",
       "tags",
     ] as const)
       assert.deepEqual(now[field], latest[field]);
+    assert.equal(now.nextStepsSourceUid, undefined);
+    assert.equal(now.nextTodos?.[0]?.title, "Wait");
+    assert.equal(now.nextTodos?.[0]?.status, "open");
     assert.equal(listTodos(db).length, 1);
-    assert.equal(convertNextStep(db, now.uid, 0).uid, listTodos(db)[0].uid);
-    assert.equal(listTodos(db).length, 1);
+    assert.throws(() => convertNextStep(db, now.uid, 0), /next step not found/);
     const copy = openLedger(":memory:");
     try {
       importLedger(copy, [exportLedger(db)]);
-      assert.equal(
-        convertNextStep(copy, now.uid, 0).uid,
-        listTodos(copy)[0].uid,
-      );
       assert.equal(listTodos(copy).length, 1);
+      assert.equal(listTodos(copy)[0].uid, listTodos(db)[0].uid);
+      assert.deepEqual(
+        current(copy, "demo")[0].nextTodoUids,
+        latest.nextTodoUids,
+      );
     } finally {
       copy.close();
     }
