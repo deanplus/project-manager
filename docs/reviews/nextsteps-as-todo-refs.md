@@ -384,3 +384,89 @@ UIDs, and statuses.
   Existing untracked review evidence was left untouched.
 
 **NO-GO — fix F12–F14 and rerun targeted cross-review before implementation acceptance.**
+
+## Round 7 — Targeted post-fix cross-review (2026-10-29)
+
+Reviewer role: Codex post-implementation cross-review.
+Session ID: `01a185c5-e78f-73c2-bd0c-ee650aa63644`
+(verified through CODEX_THREAD_ID).
+Reviewed HEAD: `3baa7198be81593ec1986f4c31cd8ab1ae74f8a6`.
+Previous reviewed HEAD: `5835a92d07dc0c29a3152571a442c85f864d412a`.
+Branch: `cursor/nextsteps-as-todo-refs-4a65`.
+PR: #1.
+
+Scope: F12–F14 fixes, their tests, and directly affected identity/import
+behavior. Reviewed the requirements, recorded Round 6 findings, and the
+5835a92..HEAD diff. No unrelated refactoring review was performed.
+
+**Disposition: NO-GO.** F13 remains partially open, and F15 is a new
+regression introduced by the retry fix.
+
+### Finding disposition
+
+- **F12 — CLOSED.** `importStatuses` now validates reference existence
+  and ownership inside its transaction. Added tests confirm that dangling
+  and cross-project references reject the batch, including preceding
+  entries, without altering existing Todos.
+
+- **F13 — OPEN, partially fixed.** `importLedger` now checks payload
+  membership and rejects omitted dependencies on both empty and populated
+  databases. However, `importStatuses` calls `assertSnapshotRefs` without
+  the payload set (`src/db.ts:496–503`). An independent reproduction
+  imported a snapshot referencing an existing unassigned Todo without
+  supplying any Todo in the payload. The same payload failed on an empty
+  database. The same-payload contract therefore remains bypassable through
+  the public API. Reject ref-bearing imports through this entry-only API,
+  or enforce the same dependency contract through a shared import path.
+
+- **F14 — CLOSED for the original retry defect.** Fixed-UID text retries
+  now return `inserted=false`, with and without externalRef. Tests also
+  cover empty nextSteps, unchanged Todo identities/counts/completion
+  state, and rejection of changed summary or titles. The broader use of
+  this equivalence rule introduces F15 below.
+
+### New findings
+
+#### F15 / P2 — Text-retry equivalence weakens portable import identity
+
+Location: `src/db.ts:332–334`, `src/db.ts:362–385`.
+
+`existingIdentity` is shared by writes and imports. Its new
+`textRefEquivalent` fallback therefore accepts a legacy-text portable
+entry as equivalent to an existing refs snapshot with the same UID.
+
+Independent in-memory reproduction:
+
+1. Create a text-sugar snapshot and export its refs bundle.
+2. Keep the entry UID and all other fields, but remove nextTodoUids and
+   set nextSteps to the corresponding Todo titles. Retain the bundle Todos.
+3. Import into the original database: accepted with `inserted=false`;
+   the existing refs snapshot remains.
+4. Import the identical payload into a fresh database: a legacy-text
+   snapshot is stored under that same UID.
+
+Baseline `5835a92` rejects step 3 with `conflicting entry uid`.
+The reviewed fix therefore introduces destination-dependent historical
+representation and silently accepts a portable identity conflict.
+
+Required correction: restrict text-to-ref replay equivalence to the
+`addStatus` text-sugar retry path. Preserve strict portable identity
+comparison for imports. Add a regression test requiring the conflicting
+bundle to fail atomically while unchanged bundles remain idempotent.
+
+### Evidence and limitations
+
+- Seven selected existing/new tests passed, covering F12–F14, legacy
+  conversion, portable identity checks, and Todo round trips.
+- TypeScript `--noEmit` passed.
+- ESLint passed for the changed implementation and test files.
+- Independent SQLite `:memory:` assertions reproduced the residual F13
+  bypass and F15.
+- An in-memory baseline comparison confirmed F15 is introduced after
+  `5835a92`.
+- Tests used disabled tsx caching. No full filesystem-writing suite,
+  build, disk migration, or browser verification was run.
+- No files, project-ledger records, commits, or deployments were changed.
+  Existing untracked review evidence was left untouched.
+
+**NO-GO — close the remaining F13 import-path gap and fix F15 before acceptance.**

@@ -569,11 +569,19 @@ test("open Todo listing prefers current pins and CLI rejects mixed next flags", 
       open.map((todo) => todo.uid),
       [second.uid, first.uid, third.uid],
     );
+    const createdOrder = [first, second, third]
+      .slice()
+      .sort(
+        (left, right) =>
+          left.createdAt.localeCompare(right.createdAt) ||
+          left.uid.localeCompare(right.uid),
+      )
+      .map((todo) => todo.uid);
     assert.deepEqual(
       JSON.parse(execute(["todos", "--status", "open", "--json"])).map(
         (todo: Todo) => todo.uid,
       ),
-      [first.uid, second.uid, third.uid],
+      createdOrder,
     );
     execute(["todo-update", "--uid", second.uid, "--status", "completed"]);
     assert.deepEqual(
@@ -1186,6 +1194,15 @@ test("fixed-UID text retries match the stored refs without duplicating Todos", (
       /conflicting entry uid/,
     );
     assert.throws(
+      () =>
+        addStatus(db, {
+          ...input,
+          nextSteps: [],
+          nextTodoUids: [randomUUID()],
+        }),
+      /conflicting entry uid/,
+    );
+    assert.throws(
       () => addStatus(db, { ...input, nextSteps: ["Alpha"] }),
       /conflicting entry uid/,
     );
@@ -1220,6 +1237,103 @@ test("fixed-UID text retries match the stored refs without duplicating Todos", (
           },
         ]),
       /conflicting entry uid/,
+    );
+    assert.throws(
+      () =>
+        addStatus(db, {
+          uid: legacyUid,
+          project: "old",
+          status: "active",
+          summary: "Legacy",
+          nextSteps: ["Text"],
+          occurredAt: "2026-08-04T00:00:00.000Z",
+        }),
+      /conflicting entry uid/,
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("importStatuses cannot reference a Todo that already exists outside the payload", () => {
+  const db = openLedger(":memory:");
+  try {
+    const local = createTodo(db, { title: "Already stored" });
+    assert.equal(local.project, null);
+    assert.throws(
+      () =>
+        importStatuses(db, [
+          {
+            project: "keep",
+            status: "active",
+            summary: "rolls back",
+            occurredAt: "2026-07-01T00:00:00.000Z",
+          },
+          {
+            project: "demo",
+            status: "active",
+            summary: "pins a local todo",
+            nextTodoUids: [local.uid],
+            occurredAt: "2026-07-02T00:00:00.000Z",
+          },
+        ]),
+      /dangling next todo uid/,
+    );
+    assert.equal(history(db).length, 0);
+    assert.deepEqual(
+      listTodos(db).map((todo) => todo.uid),
+      [local.uid],
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("import identity stays strict when a refs snapshot is rewritten as text", () => {
+  const db = openLedger(":memory:");
+  try {
+    const uid = randomUUID();
+    const occurredAt = "2026-09-01T00:00:00.000Z";
+    const created = addStatus(db, {
+      uid,
+      project: "demo",
+      status: "active",
+      summary: "Exported",
+      nextSteps: ["Alpha", "Beta"],
+      occurredAt,
+      externalRef: "portable",
+    });
+    const bundle = exportLedger(db);
+    importLedger(db, [structuredClone(bundle)]);
+    const before = exportLedger(db);
+    assert.deepEqual(before, bundle);
+    const stored = history(db).find((entry) => entry.uid === uid);
+    assert.deepEqual(stored?.nextSteps, []);
+    assert.deepEqual(stored?.nextTodoUids, created.entry.nextTodoUids);
+    const mutated = structuredClone(bundle);
+    const entry = mutated.entries.find((item) => item.uid === uid);
+    assert.ok(entry);
+    delete entry.nextTodoUids;
+    entry.nextSteps = ["Alpha", "Beta"];
+    assert.throws(
+      () =>
+        importLedger(db, [
+          {
+            project: "keep",
+            status: "active",
+            summary: "rolls back",
+            occurredAt: "2026-09-02T00:00:00.000Z",
+          },
+          mutated,
+        ]),
+      /conflicting entry uid/,
+    );
+    assert.equal(history(db, "keep").length, 0);
+    assert.deepEqual(exportLedger(db), before);
+    assert.equal(listTodos(db).length, 2);
+    assert.deepEqual(
+      history(db).find((item) => item.uid === uid)?.nextTodoUids,
+      created.entry.nextTodoUids,
     );
   } finally {
     db.close();

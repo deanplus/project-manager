@@ -320,6 +320,7 @@ function existingIdentity(
   db: Ledger,
   input: StatusEntryInput & { occurredAt: string; source: Source },
   recordedAt?: string,
+  textRetry = false,
 ): InsertResult | undefined {
   if (input.uid) {
     const existing = one(db, `${select} WHERE e.uid = ?`, input.uid);
@@ -329,9 +330,10 @@ function existingIdentity(
         id: existing.id,
         recordedAt: existing.recordedAt,
       } as StatusEntry);
+      // Text/ref equivalence is only for addStatus sugar retries, not imports.
       const sameWrite =
         isDeepStrictEqual(toPortableStatusEntry(existing), candidate) ||
-        textRefEquivalent(db, existing, input);
+        (textRetry && textRefEquivalent(db, existing, input));
       if (
         !sameWrite ||
         (recordedAt !== undefined && recordedAt !== existing.recordedAt)
@@ -396,7 +398,7 @@ export function addStatus(
     throw new ValidationError("new snapshots cannot set nextStepsSourceUid");
   return db
     .transaction(() => {
-      const replay = existingIdentity(db, input);
+      const replay = existingIdentity(db, input, undefined, true);
       if (replay) {
         linkCompletions(db, completes, replay.entry.uid, input.source);
         return replay;
@@ -497,8 +499,15 @@ export function importStatuses(db: Ledger, values: unknown[]): InsertResult[] {
   const inputs = values.map((value) => validateStatusEntry(value, "import"));
   return db.transaction(() => {
     const results = inputs.map((input) => addValidatedStatus(db, input));
+    // Entry-only imports declare no Todos, so every ref is an omitted dependency.
+    const payloadTodos = new Set<string>();
     for (const result of results)
-      assertSnapshotRefs(db, result.entry.project, result.entry.nextTodoUids);
+      assertSnapshotRefs(
+        db,
+        result.entry.project,
+        result.entry.nextTodoUids,
+        payloadTodos,
+      );
     return results;
   })();
 }
@@ -984,12 +993,12 @@ function assertSnapshotRefs(
 ): void {
   if (uids === undefined) return;
   for (const uid of uids) {
-    if (payloadTodos && !payloadTodos.has(uid))
-      throw new ValidationError("dangling next todo uid");
     const todo = todoByUid(db, uid);
     if (!todo) throw new ValidationError("dangling next todo uid");
     if (todo.project !== null && todo.project !== project)
       throw new ValidationError("cross-project next todo ref");
+    if (payloadTodos && !payloadTodos.has(uid))
+      throw new ValidationError("dangling next todo uid");
   }
 }
 
