@@ -45,7 +45,10 @@ test("completion propagates explicitly, survives filtering, revokes, and preserv
     ]).entry;
     assert.equal(getEntry(db, a.uid)?.status, "active");
     assert.equal(getEntry(db, a.uid)?.effectiveStatus, "completed");
-    assert.deepEqual(getEntry(db, a.uid)?.nextSteps, ["deploy"]);
+    assert.deepEqual(getEntry(db, a.uid)?.nextSteps, []);
+    assert.deepEqual(getEntry(db, a.uid)?.blockers, ["review"]);
+    assert.deepEqual(getEntry(db, a.uid)?.nextTodoUids, a.nextTodoUids);
+    assert.equal(a.nextTodoUids?.length, 1);
     assert.equal(getEntry(db, b.uid)?.completedBy?.id, by.id);
     assert.equal(getEntry(db, untouched.uid)?.effectiveStatus, "active");
     assert.equal(getEntry(db, originalDone.uid)?.effectiveStatus, "completed");
@@ -386,7 +389,7 @@ test("migration adds identities to legacy snapshots without changing content", (
         n: number;
       }
     ).n,
-    4,
+    5,
   );
   raw.close();
   rmSync(dir, { recursive: true, force: true });

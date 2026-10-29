@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import Database from "better-sqlite3";
@@ -130,6 +131,12 @@ export function openLedger(path = databasePath()): Ledger {
       CREATE INDEX idx_todos_project ON todos(project);
       INSERT INTO schema_migrations(version) VALUES (4);`);
     }
+    if (
+      !db.prepare("SELECT 1 FROM schema_migrations WHERE version = 5").get()
+    ) {
+      db.exec(`ALTER TABLE status_entries ADD COLUMN next_todo_uids_json TEXT;
+        INSERT INTO schema_migrations(version) VALUES (5);`);
+    }
   }).immediate();
   return db;
 }
@@ -144,6 +151,14 @@ function entryFromRow(row: Record<string, unknown>): StatusEntry {
     ...(row.progress ? { progress: row.progress as string } : {}),
     blockers: JSON.parse(row.blockers_json as string) as string[],
     nextSteps: JSON.parse(row.next_steps_json as string) as string[],
+    // NULL means legacy (field absent). An explicit JSON array, including [], is new format.
+    ...(row.next_todo_uids_json == null
+      ? {}
+      : {
+          nextTodoUids: JSON.parse(
+            row.next_todo_uids_json as string,
+          ) as string[],
+        }),
     ...(row.next_steps_source_uid
       ? { nextStepsSourceUid: row.next_steps_source_uid as string }
       : {}),
@@ -291,39 +306,21 @@ export function listProjects(
   });
 }
 
-export function addStatus(
+function linkCompletions(
   db: Ledger,
-  value: unknown,
-  defaultSource: Source = "human",
-  completes: string[] = [],
-): InsertResult {
-  const input = validateStatusEntry(value, defaultSource);
-  return db
-    .transaction(() => {
-      const result = addValidatedStatus(db, input);
-      if (result.inserted && !result.entry.nextStepsSourceUid)
-        result.entry.nextSteps.forEach((_, index) =>
-          convertNextStep(db, result.entry.uid, index),
-        );
-      for (const target of completes)
-        changeCompletion(
-          db,
-          target,
-          result.entry.uid,
-          "complete",
-          undefined,
-          input.source,
-        );
-      return result;
-    })
-    .immediate();
+  targets: string[],
+  byUid: string,
+  source: Source,
+): void {
+  for (const target of targets)
+    changeCompletion(db, target, byUid, "complete", undefined, source);
 }
 
-function addValidatedStatus(
+function existingIdentity(
   db: Ledger,
   input: StatusEntryInput & { occurredAt: string; source: Source },
   recordedAt?: string,
-): InsertResult {
+): InsertResult | undefined {
   if (input.uid) {
     const existing = one(db, `${select} WHERE e.uid = ?`, input.uid);
     if (existing) {
@@ -356,6 +353,66 @@ function addValidatedStatus(
       return { entry: existing, inserted: false };
     }
   }
+  return undefined;
+}
+
+export function addStatus(
+  db: Ledger,
+  value: unknown,
+  defaultSource: Source = "human",
+  completes: string[] = [],
+): InsertResult {
+  const input = validateStatusEntry(value, defaultSource);
+  if (input.nextStepsSourceUid)
+    throw new ValidationError("new snapshots cannot set nextStepsSourceUid");
+  return db
+    .transaction(() => {
+      const replay = existingIdentity(db, input);
+      if (replay) {
+        linkCompletions(db, completes, replay.entry.uid, input.source);
+        return replay;
+      }
+      if (input.nextTodoUids !== undefined) {
+        assertSnapshotRefs(db, input.project, input.nextTodoUids);
+        const result = addValidatedStatus(db, { ...input, nextSteps: [] });
+        linkCompletions(db, completes, result.entry.uid, input.source);
+        return result;
+      }
+      // Text --next sugar: one new Todo per title, stored only as refs.
+      const uid = input.uid ?? randomUUID();
+      const nextTodoUids = input.nextSteps.map(() => randomUUID());
+      const recordedAt = new Date().toISOString();
+      const result = addValidatedStatus(
+        db,
+        { ...input, uid, nextSteps: [], nextTodoUids },
+        recordedAt,
+      );
+      assert.equal(result.inserted, true);
+      input.nextSteps.forEach((title, index) => {
+        insertTodo(db, {
+          uid: nextTodoUids[index],
+          title,
+          project: result.entry.project,
+          entryUid: result.entry.uid,
+          stepIndex: index,
+          status: "open",
+          createdAt: recordedAt,
+          completedAt: null,
+        });
+      });
+      linkCompletions(db, completes, result.entry.uid, input.source);
+      return result;
+    })
+    .immediate();
+}
+
+function addValidatedStatus(
+  db: Ledger,
+  input: StatusEntryInput & { occurredAt: string; source: Source },
+  recordedAt?: string,
+): InsertResult {
+  const existing = existingIdentity(db, input, recordedAt);
+  if (existing) return existing;
   if (input.nextStepsSourceUid) {
     const origin = getEntry(db, input.nextStepsSourceUid);
     if (
@@ -375,8 +432,8 @@ function addValidatedStatus(
     .get(input.project) as { id: number };
   const result = db
     .prepare(
-      `INSERT INTO status_entries(project_id, status, summary, progress, blockers_json, next_steps_json, decisions_json, tags_json, occurred_at, recorded_at, source, external_ref, uid, next_steps_source_uid)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO status_entries(project_id, status, summary, progress, blockers_json, next_steps_json, decisions_json, tags_json, occurred_at, recorded_at, source, external_ref, uid, next_steps_source_uid, next_todo_uids_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       project.id,
@@ -393,6 +450,9 @@ function addValidatedStatus(
       input.externalRef ?? null,
       input.uid ?? randomUUID(),
       input.nextStepsSourceUid ?? null,
+      input.nextTodoUids === undefined
+        ? null
+        : JSON.stringify(input.nextTodoUids),
     );
   return {
     entry: one(
@@ -455,6 +515,7 @@ export function at(
   project: string,
   occurredAt: string,
 ): StatusEntry | undefined {
+  // Stored snapshot only. Refs may be present; live Todo titles are not historical.
   return one(
     db,
     `${select} WHERE p.slug = ? AND e.occurred_at <= ? ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1`,
@@ -536,6 +597,9 @@ function annotateEntry(db: Ledger, entry: StatusEntry): StatusEntry {
     ...entry,
     effectiveStatus: followUp ? "completed" : entry.status,
     isCurrent: newest?.id === entry.id,
+    ...(entry.nextTodoUids !== undefined
+      ? { nextTodos: entry.nextTodoUids.map((uid) => resolveNextTodo(db, uid)) }
+      : {}),
     ...(followUp && latest
       ? {
           completedBy: {
@@ -672,17 +736,13 @@ export function exportLedger(db: Ledger, project?: string) {
         `SELECT c.* FROM completion_events c JOIN status_entries e ON e.uid = c.target_uid JOIN projects p ON p.id = e.project_id ${project ? "WHERE p.slug = ?" : ""} ORDER BY c.id`,
       )
       .all(...(project ? [project] : [])) as Record<string, unknown>[];
-    const todos = listTodos(db, project);
+    const todos = project ? todosVisibleToProject(db, project) : listTodos(db);
+    const version = ledgerVersion(entries, todos);
     return {
-      version:
-        todos.length || entries.some((entry) => entry.nextStepsSourceUid)
-          ? 3
-          : 2,
+      version,
       entries,
       completions: rows.map(completionFromRow),
-      ...(todos.length || entries.some((entry) => entry.nextStepsSourceUid)
-        ? { todos }
-        : {}),
+      ...(version >= 3 ? { todos } : {}),
     };
   })();
 }
@@ -745,35 +805,48 @@ export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
             "completions",
             "todos",
           ]);
+          const version = bundle.version;
           if (
-            (bundle.version !== 2 && bundle.version !== 3) ||
-            (bundle.version === 3 && !Array.isArray(bundle.todos)) ||
-            (bundle.version === 2 && bundle.todos !== undefined) ||
+            (version !== 2 && version !== 3 && version !== 4) ||
+            ((version === 3 || version === 4) &&
+              !Array.isArray(bundle.todos)) ||
+            (version === 2 && bundle.todos !== undefined) ||
             !Array.isArray(bundle.entries) ||
             !Array.isArray(bundle.completions)
           )
             throw new ValidationError("invalid ledger bundle");
+          const imported: StatusEntry[] = [];
           for (const item of bundle.entries) {
             if (!item || typeof item !== "object" || Array.isArray(item))
               throw new ValidationError("entry must be an object");
             const { recordedAt, ...input } = item as Record<string, unknown>;
             validateUid(input.uid);
-            results.push(
-              addValidatedStatus(
-                db,
-                validateStatusEntry(input, "import"),
-                parseTime(recordedAt, "recordedAt"),
-              ),
+            const result = addValidatedStatus(
+              db,
+              validateStatusEntry(input, "import"),
+              parseTime(recordedAt, "recordedAt"),
             );
+            imported.push(result.entry);
+            results.push(result);
           }
           for (const event of bundle.completions)
             insertCompletion(db, validateCompletionEvent(event));
-          if (bundle.version === 3)
+          if (version === 3 || version === 4)
             for (const todo of bundle.todos as unknown[]) importTodo(db, todo);
-        } else
-          results.push(
-            addValidatedStatus(db, validateStatusEntry(value, "import")),
+          for (const entry of imported)
+            assertSnapshotRefs(db, entry.project, entry.nextTodoUids);
+        } else {
+          const result = addValidatedStatus(
+            db,
+            validateStatusEntry(value, "import"),
           );
+          results.push(result);
+          assertSnapshotRefs(
+            db,
+            result.entry.project,
+            result.entry.nextTodoUids,
+          );
+        }
       }
       return results;
     })
@@ -792,14 +865,163 @@ export type Todo = {
 };
 const todoSelect = `SELECT uid, title, project, entry_uid AS entryUid,
   step_index AS stepIndex, status, created_at AS createdAt, completed_at AS completedAt FROM todos`;
-export function listTodos(db: Ledger, project?: string): Todo[] {
+
+function ledgerVersion(
+  entries: { nextTodoUids?: string[]; nextStepsSourceUid?: string }[],
+  todos: unknown[],
+): 2 | 3 | 4 {
+  if (entries.some((entry) => entry.nextTodoUids !== undefined)) return 4;
+  if (
+    todos.length > 0 ||
+    entries.some((entry) => entry.nextStepsSourceUid !== undefined)
+  )
+    return 3;
+  return 2;
+}
+
+function todosVisibleToProject(db: Ledger, project: string): Todo[] {
   return db
     .prepare(
+      `${todoSelect} WHERE project = ?
+        OR uid IN (
+          SELECT j.value FROM status_entries e
+          JOIN projects p ON p.id = e.project_id
+          JOIN json_each(e.next_todo_uids_json) j
+          WHERE p.slug = ? AND e.next_todo_uids_json IS NOT NULL
+        )
+        ORDER BY created_at, uid`,
+    )
+    .all(project, project) as Todo[];
+}
+
+function todoByUid(db: Ledger, uid: string): Todo | undefined {
+  return db.prepare(todoSelect + " WHERE uid = ?").get(uid) as Todo | undefined;
+}
+
+function resolveNextTodo(
+  db: Ledger,
+  uid: string,
+): {
+  uid: string;
+  title: string;
+  status: Todo["status"];
+  project: string | null;
+} {
+  const todo = todoByUid(db, uid);
+  if (!todo) return { uid, title: uid, status: "open", project: null };
+  return {
+    uid: todo.uid,
+    title: todo.title,
+    status: todo.status,
+    project: todo.project,
+  };
+}
+
+function assertSnapshotRefs(
+  db: Ledger,
+  project: string,
+  uids: string[] | undefined,
+): void {
+  if (uids === undefined) return;
+  for (const uid of uids) {
+    const todo = todoByUid(db, uid);
+    if (!todo) throw new ValidationError("dangling next todo uid");
+    if (todo.project !== null && todo.project !== project)
+      throw new ValidationError("cross-project next todo ref");
+  }
+}
+
+function todoIsReferenced(db: Ledger, uid: string): boolean {
+  return (
+    db
+      .prepare(
+        `SELECT 1 AS found FROM status_entries, json_each(next_todo_uids_json)
+         WHERE next_todo_uids_json IS NOT NULL AND json_each.value = ? LIMIT 1`,
+      )
+      .get(uid) !== undefined
+  );
+}
+
+function stepTodo(
+  db: Ledger,
+  entryUid: string,
+  index: number,
+): Todo | undefined {
+  return db
+    .prepare(todoSelect + " WHERE entry_uid = ? AND step_index = ?")
+    .get(entryUid, index) as Todo | undefined;
+}
+
+function legacySource(db: Ledger, entry: StatusEntry): StatusEntry {
+  if (!entry.nextStepsSourceUid) return entry;
+  const origin = getEntry(db, entry.nextStepsSourceUid);
+  assert.ok(origin);
+  assert.equal(origin.nextStepsSourceUid, undefined);
+  return origin;
+}
+
+function preservedNextWork(
+  db: Ledger,
+  latest: StatusEntry,
+): Pick<StatusEntryInput, "nextSteps" | "nextStepsSourceUid" | "nextTodoUids"> {
+  if (latest.nextTodoUids !== undefined)
+    return { nextSteps: [], nextTodoUids: [...latest.nextTodoUids] };
+  const source = legacySource(db, latest);
+  const pending = source.nextSteps.some(
+    (_, index) => stepTodo(db, source.uid, index) === undefined,
+  );
+  if (pending)
+    return {
+      nextSteps: [...source.nextSteps],
+      nextStepsSourceUid: source.uid,
+    };
+  return {
+    nextSteps: [],
+    nextTodoUids: source.nextSteps.map((_, index) => {
+      const todo = stepTodo(db, source.uid, index);
+      assert.ok(todo);
+      return todo.uid;
+    }),
+  };
+}
+
+export function listTodos(
+  db: Ledger,
+  project?: string,
+  options: { status?: Todo["status"] } = {},
+): Todo[] {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (project) {
+    clauses.push("project = ?");
+    params.push(project);
+  }
+  if (options.status !== undefined) {
+    if (!["open", "completed", "cancelled"].includes(options.status))
+      throw new ValidationError("invalid todo status");
+    clauses.push("status = ?");
+    params.push(options.status);
+  }
+  const rows = db
+    .prepare(
       todoSelect +
-        (project ? " WHERE project = ?" : "") +
+        (clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "") +
         " ORDER BY created_at, uid",
     )
-    .all(...(project ? [project] : [])) as Todo[];
+    .all(...params) as Todo[];
+  const pins =
+    options.status === "open" && project
+      ? current(db, project)[0]?.nextTodoUids
+      : undefined;
+  if (pins?.length) {
+    const rank = new Map(pins.map((uid, index) => [uid, index]));
+    rows.sort((left, right) => {
+      const leftRank = rank.get(left.uid) ?? pins.length;
+      const rightRank = rank.get(right.uid) ?? pins.length;
+      return leftRank - rightRank;
+    });
+  }
+  return rows;
 }
 function insertTodo(db: Ledger, todo: Todo): Todo {
   db.prepare(
@@ -901,17 +1123,26 @@ export function updateTodo(db: Ledger, uid: string, value: unknown): Todo {
         }
       }
       if (input.project !== undefined) {
-        if (todo.entryUid)
-          throw new ValidationError("source-linked todo project cannot change");
-        todo.project =
+        const nextProject =
           input.project === null
             ? null
             : validateProjectMetadataInput({ project: input.project }).project;
-        if (
-          todo.project &&
-          !db.prepare("SELECT 1 FROM projects WHERE slug = ?").get(todo.project)
-        )
-          throw new ValidationError("project not found");
+        if (nextProject !== todo.project) {
+          if (todo.entryUid || todoIsReferenced(db, todo.uid))
+            throw new ValidationError(
+              todo.entryUid
+                ? "source-linked todo project cannot change"
+                : "referenced todo project cannot change",
+            );
+          if (
+            nextProject &&
+            !db
+              .prepare("SELECT 1 FROM projects WHERE slug = ?")
+              .get(nextProject)
+          )
+            throw new ValidationError("project not found");
+          todo.project = nextProject;
+        }
       }
       db.prepare(
         "UPDATE todos SET status=?, completed_at=?, project=? WHERE uid=?",
@@ -952,13 +1183,16 @@ function importTodo(db: Ledger, value: unknown): void {
     const entry = getEntry(db, validateUid(input.entryUid));
     if (!entry || entry.project !== input.project)
       throw new ValidationError("invalid todo source");
-    if (
-      input.stepIndex !== null &&
-      (!Number.isInteger(input.stepIndex) ||
-        Number(input.stepIndex) < 0 ||
-        entry.nextSteps[Number(input.stepIndex)] !== input.title)
-    )
-      throw new ValidationError("invalid next step index");
+    if (input.stepIndex !== null) {
+      if (!Number.isInteger(input.stepIndex) || Number(input.stepIndex) < 0)
+        throw new ValidationError("invalid next step index");
+      const index = Number(input.stepIndex);
+      if (entry.nextTodoUids !== undefined) {
+        if (entry.nextTodoUids[index] !== input.uid)
+          throw new ValidationError("invalid next step index");
+      } else if (entry.nextSteps[index] !== input.title)
+        throw new ValidationError("invalid next step index");
+    }
   } else if (input.stepIndex !== null)
     throw new ValidationError("next step requires a source");
   const todo = input as Todo;
@@ -978,7 +1212,8 @@ export function completeActivity(db: Ledger, ref: string): StatusEntry {
       const occurredAt = new Date(
         Math.max(Date.now(), Date.parse(latest.occurredAt) + 1),
       ).toISOString();
-      // Preserve current context without generating another set of next-step Todos.
+      // Copy refs, or keep the full legacy string list until every index is converted.
+      const preserved = preservedNextWork(db, latest);
       const followUp = addValidatedStatus(
         db,
         validateStatusEntry({
@@ -987,11 +1222,10 @@ export function completeActivity(db: Ledger, ref: string): StatusEntry {
           summary: `Completed activity #${entry.id}`,
           progress: latest.progress,
           blockers: latest.blockers,
-          nextSteps: latest.nextSteps,
-          nextStepsSourceUid: latest.nextStepsSourceUid ?? latest.uid,
           decisions: latest.decisions,
           tags: latest.tags,
           occurredAt,
+          ...preserved,
         }),
       );
       changeCompletion(db, entry.uid, followUp.entry.uid);

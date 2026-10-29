@@ -225,7 +225,7 @@ pnpm start projects --query "mvp" --json
 
 ## Bulk import
 
-`import` accepts a JSON object, a JSON array, or a JSONL file containing one object per line. Every record is validated before the whole batch is written in one SQLite transaction; any failure rolls back the entire batch.
+`import` accepts a JSON object, a JSON array, or a JSONL file containing one object per line. Every record is validated before the whole batch is written in one SQLite transaction; any failure rolls back the entire batch. The example below is a legacy entry: string `nextSteps` are kept and do not create Todos. New snapshots created with `add` store `nextTodoUids` instead.
 
 ```json
 {
@@ -336,22 +336,49 @@ Independently migrated copies of legacy data receive different UUIDs. Cross-impo
 
 ### Todos and dashboard actions
 
-New `add --next` values create independent Todos linked to the new activity.
-Historical next steps stay as text until explicitly converted in the dashboard.
-The Todos tab supports standalone creation, optional project assignment, source
-links, completion, cancellation, and reopening. Project cards filter this list.
-Activity cards provide **Mark completed**, recording a follow-up with the current
-project status; this neither completes the project nor its Todos.
+Todos own actionable work. A new status snapshot stores ordered `nextTodoUids`
+and does not persist next-step prose. `add --next` creates one Todo per title
+and stores those UIDs in the same transaction. Repeating the same text on a
+later snapshot creates new Todos; pass `--next-todo` to keep existing work.
+Do not combine `--next` with `--next-todo`. Duplicate UIDs in one list are rejected.
 
 ```sh
-pmgr todo-add --title "Review results" --project demo --json
+pmgr add --project demo --status active --summary "Review queued" \
+  --next "Collect logs" --next "Write the note" --source agent --json
 pmgr todo-add --title "Unassigned idea" --json
-pmgr todos --project demo --json
+pmgr add --project demo --status active --summary "Pin the idea" \
+  --next-todo <todo-uuid> --source agent --json
+pmgr todos --project demo --status open --json
 pmgr todo-update --uid <todo-uuid> --status completed --json
+pmgr todo-update --uid <todo-uuid> --status cancelled --json
 ```
 
-Exports with Todos use version 3 and preserve their identities and state;
-version-2 and legacy imports remain supported without creating new Todos from
-old next-step text. Conflicting Todo snapshots are rejected atomically on import.
-Dashboard writes are restricted to same-origin localhost requests with JSON bodies;
-remote-host dashboards remain read-only.
+`todos --status open` answers open work from Todos, not from string next steps.
+With `--project`, UIDs pinned on the current snapshot are ordered first.
+Completing or cancelling a Todo updates every resolved view and does not rewrite
+snapshots. Omitting a UID from a newer snapshot unpins it and does not change
+the Todo status.
+
+Legacy snapshots keep string `nextSteps` and omit `nextTodoUids`. Convert each
+index explicitly; conversion does not append a snapshot. While any source index
+is still unconverted, a completion follow-up copies the full string list and
+`nextStepsSourceUid`. After every index has a Todo, the follow-up materializes
+`nextTodoUids` in source-index order and does not create Todos or change status.
+A snapshot never stores both prose and refs.
+
+`current` and `history` include stored `nextTodoUids` plus live `nextTodos`
+(`uid`, `title`, `status`, `project`). That view is the Todo now, not its state
+at the snapshot time. `at` returns the stored snapshot, including refs when
+present, and does not add the live view.
+
+A snapshot may reference Todos that are unassigned or already in that project.
+If a Todo appears in any `nextTodoUids`, or is linked to a source entry, its
+project cannot be changed. Unpinning the current snapshot does not lift that lock.
+
+Exports that contain refs use version 4 and include every referenced Todo.
+Version 3 remains the Todo bundle without refs. Version 2 and legacy imports
+do not invent open work. Dangling, duplicate, mixed, or cross-project refs fail
+the whole import. Dashboard writes stay same-origin localhost JSON. Activity
+cards still offer **Mark completed**, which appends a follow-up and does not
+complete the project or its Todos. Adding a Todo from the dashboard does not
+pin it; pinning requires a new snapshot.

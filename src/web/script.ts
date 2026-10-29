@@ -185,7 +185,16 @@ export function getWebUIScript(initialLang: Locale): string {
             </div>
           \` : ''}
 
-          \${item.nextSteps && item.nextSteps.length ? \`
+          \${pinnedTodos(item).length ? \`
+            <div class="section-box">
+              <div class="section-title next-steps">\${escapeHtml(t('nextStepsTitle'))}</div>
+              <ul class="bullet-list">
+                \${pinnedTodos(item).map(todo => \`<li><strong>\${escapeHtml(todo.title)}</strong> <span class="status-badge status-\${escapeHtml(todo.status)}">\${escapeHtml(t('todo_' + todo.status))}</span> <code>\${escapeHtml(todo.uid)}</code></li>\`).join('')}
+              </ul>
+            </div>
+          \` : ''}
+
+          \${!item.nextTodoUids && item.nextSteps && item.nextSteps.length ? \`
             <div class="section-box">
               <div class="section-title next-steps">\${escapeHtml(t('nextStepsTitle'))}</div>
               <ul class="bullet-list">
@@ -212,7 +221,7 @@ export function getWebUIScript(initialLang: Locale): string {
           <div class="section-box">
             <button class="btn" data-action="add-todo" data-entry="\${escapeHtml(item.uid)}">\${escapeHtml(t('addTodo'))}</button>
             \${status !== 'completed' ? \`<button class="btn" data-action="complete-entry" data-entry="\${escapeHtml(item.uid)}">\${escapeHtml(t('complete'))}</button>\` : ''}
-            \${todosData.filter(todo => todo.entryUid === item.uid || todo.entryUid === item.nextStepsSourceUid).map(renderTodo).join('')}
+            \${todosData.filter(todo => (todo.entryUid === item.uid || todo.entryUid === item.nextStepsSourceUid) && !(item.nextTodoUids || []).includes(todo.uid)).map(renderTodo).join('')}
           </div>
         </div>
       \`;
@@ -284,6 +293,7 @@ export function getWebUIScript(initialLang: Locale): string {
                     <div class="latest-summary">
                       <div class="latest-summary-title">\${escapeHtml(t('latestUpdate'))} (\${formatTime(p.latestStatus.occurredAt)})</div>
                       <div>\${escapeHtml(p.latestStatus.summary)}</div>
+                      \${Array.isArray(p.latestStatus.nextTodos) && p.latestStatus.nextTodos.length ? \`<ul class="bullet-list">\${p.latestStatus.nextTodos.map(todo => \`<li>\${escapeHtml(todo.title)} <span class="status-badge status-\${escapeHtml(todo.status)}">\${escapeHtml(t('todo_' + todo.status))}</span></li>\`).join('')}</ul>\` : ''}
                     </div>
                   \` : ''}
                 </div>
@@ -376,6 +386,15 @@ export function getWebUIScript(initialLang: Locale): string {
     function projectOptions(selected) {
       return '<option value="">' + escapeHtml(t('noProject')) + '</option>' + projectsData.map(p =>
         '<option value="' + escapeHtml(p.project) + '"' + (selected === p.project ? ' selected' : '') + '>' + escapeHtml(p.displayName) + '</option>').join('');
+    }
+    function pinnedTodos(item) {
+      if (!Array.isArray(item.nextTodoUids)) return [];
+      const embedded = Array.isArray(item.nextTodos) ? item.nextTodos : [];
+      return item.nextTodoUids.map((uid) => {
+        const live = todosData.find((todo) => todo.uid === uid);
+        const snapshot = embedded.find((todo) => todo.uid === uid);
+        return live || snapshot || { uid, title: uid, status: 'open', project: null };
+      });
     }
     function renderTodo(todo) {
       return '<div class="section-box"><strong>' + escapeHtml(todo.title) + '</strong> · ' + escapeHtml(t('todo_' + todo.status)) +

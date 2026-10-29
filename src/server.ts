@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   createServer,
   type IncomingMessage,
@@ -39,17 +39,20 @@ export type ServerInstance = {
 
 export function openBrowser(url: string): void {
   const platform = process.platform;
-  let command = "";
-  if (platform === "darwin") {
-    command = `open "${url}"`;
-  } else if (platform === "win32") {
-    command = `start "" "${url}"`;
-  } else {
-    command = `xdg-open "${url}"`;
-  }
-  exec(command, () => {
-    /* ignore background exec errors */
+  const command =
+    platform === "darwin" ? "open" : platform === "win32" ? "cmd" : "xdg-open";
+  const args =
+    platform === "darwin"
+      ? [url]
+      : platform === "win32"
+        ? ["/c", "start", "", url]
+        : [url];
+  const child = spawn(command, args, { detached: true, stdio: "ignore" });
+  child.on("error", () => {
+    /* ignore background launch errors */
   });
+  // Detach so a long-lived browser does not keep this process alive.
+  child.unref();
 }
 
 function parseQueryParams(url: URL): Record<string, string> {
@@ -119,7 +122,27 @@ export function handleRequest(
   }
 
   if (pathname === "/api/todos") {
-    sendJson(res, 200, listTodos(db, query.project));
+    const status = query.status;
+    if (
+      status !== undefined &&
+      status !== "open" &&
+      status !== "completed" &&
+      status !== "cancelled"
+    ) {
+      sendJson(res, 400, { error: "invalid todo status" });
+      return;
+    }
+    sendJson(
+      res,
+      200,
+      listTodos(
+        db,
+        query.project,
+        status === undefined
+          ? {}
+          : { status: status as "open" | "completed" | "cancelled" },
+      ),
+    );
     return;
   }
   if (pathname === "/api/projects") {

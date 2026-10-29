@@ -223,7 +223,7 @@ pnpm start projects --query "mvp" --json
 
 ## 批量导入
 
-`import` 接受一个 JSON 对象、JSON 数组，或每行一个对象的 JSONL 文件。所有记录先校验，再在同一个 SQLite 事务中写入；任一记录失败时整批回滚。
+`import` 接受一个 JSON 对象、JSON 数组，或每行一个对象的 JSONL 文件。所有记录先校验，再在同一个 SQLite 事务中写入；任一记录失败时整批回滚。下面的示例是旧格式条目：字符串 `nextSteps` 会保留，且不会创建待办。用 `add` 写入的新快照会改为存储 `nextTodoUids`。
 
 ```json
 {
@@ -334,20 +334,44 @@ pmgr revoke-completion --entry 12 --by 18 --reason "验收仍未完成" --source
 
 ### 待办与仪表板操作
 
-新的 `add --next` 会创建独立待办，并关联到这条新动态。
-历史中的下一步仍只是文本，直到在仪表板里显式转为待办。
-待办页支持单独创建、可选关联项目、查看来源动态、标为已完成、取消和重新打开。项目卡片可以筛选这份列表。
-动态卡片提供 **标为已完成**，会用当前项目状态记一条后续动态；这既不会把项目标成完成，也不会完成它的待办。
+待办是具体工作的来源。新的状态快照按顺序存储 `nextTodoUids`，不再把下一步原文写入快照。
+`add --next` 会为每条标题创建一个待办，并在同一事务里写入这些 UID。
+之后的快照如果再次输入相同文本，会创建新的待办；要沿用已有工作，请传 `--next-todo`。
+不要把 `--next` 和 `--next-todo` 写在同一次 `add` 里。同一列表里的重复 UID 会被拒绝。
 
 ```sh
-pmgr todo-add --title "复查结果" --project demo --json
+pmgr add --project demo --status active --summary "已排队复查" \
+  --next "收集日志" --next "写说明" --source agent --json
 pmgr todo-add --title "未归属的想法" --json
-pmgr todos --project demo --json
+pmgr add --project demo --status active --summary "钉住这个想法" \
+  --next-todo <todo-uuid> --source agent --json
+pmgr todos --project demo --status open --json
 pmgr todo-update --uid <todo-uuid> --status completed --json
+pmgr todo-update --uid <todo-uuid> --status cancelled --json
 ```
 
-带待办的导出使用 version 3，并保留待办的身份与状态；
-version 2 和旧版导入仍然可用，且不会把旧的下一步文本自动变成新待办。
-冲突的待办快照会在导入时整批拒绝。
-仪表板写入仅接受同源的 localhost JSON 请求；
-绑定到远程主机时，仪表板保持只读。
+`todos --status open` 从待办而不是字符串下一步回答「还有哪些未完成工作」。
+加上 `--project` 时，当前快照钉住的 UID 会排在前面。
+完成或取消待办会立刻反映在所有解析视图上，且不会改写历史快照。
+新快照不再列入某个 UID，只表示它不再是当前下一步，不会改变该待办的状态。
+
+旧快照保留字符串 `nextSteps`，并省略 `nextTodoUids`。转换仍按来源下标显式进行，且不会追加快照。
+只要还有来源下标未转换，完成活动时的后续快照会复制完整字符串列表和 `nextStepsSourceUid`。
+每个下标都已有待办之后，后续快照才按原下标顺序写入 `nextTodoUids`，不新建待办，也不改变状态。
+一条快照不能同时保存原文和引用。
+
+`current` 和 `history` 会带上存储的 `nextTodoUids`，以及实时的 `nextTodos`（`uid`、`title`、`status`、`project`）。
+这个视图是待办的当前状态，不是快照发生时的历史状态。
+`at` 返回当时的快照；如果存了引用就包含引用，但不会附加实时视图。
+
+快照只能引用未归属的待办，或已经属于该项目的待办。
+待办一旦出现在任意 `nextTodoUids` 中，或关联了来源动态，就不能再改项目。
+从当前快照拿掉引用，也不会解除这个限制。
+
+带引用的导出使用 version 4，并包含被引用的待办。
+没有引用、但有待办的导出仍是 version 3。
+version 2 和旧版导入不会凭空创建待办。
+悬空、重复、混用或跨项目引用会使整批导入失败。
+仪表板写入仍只接受同源的 localhost JSON 请求。
+动态卡片上的 **标为已完成** 会追加一条后续动态，既不完成项目，也不完成待办。
+在仪表板里新增待办不会把它钉进当前下一步；钉住需要再写一条快照。

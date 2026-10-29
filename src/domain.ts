@@ -31,6 +31,13 @@ export type ProjectMetadataInput = {
   notes?: string | null;
 };
 
+export type NextTodoRef = {
+  uid: string;
+  title: string;
+  status: "open" | "completed" | "cancelled";
+  project: string | null;
+};
+
 export type StatusEntryInput = {
   uid?: string;
   project: string;
@@ -39,6 +46,7 @@ export type StatusEntryInput = {
   progress?: string;
   blockers?: string[];
   nextSteps?: string[];
+  nextTodoUids?: string[];
   nextStepsSourceUid?: string;
   decisions?: string[];
   tags?: string[];
@@ -48,9 +56,15 @@ export type StatusEntryInput = {
 };
 
 export type StatusEntry = Required<
-  Omit<StatusEntryInput, "progress" | "externalRef" | "nextStepsSourceUid">
+  Omit<
+    StatusEntryInput,
+    "progress" | "externalRef" | "nextStepsSourceUid" | "nextTodoUids"
+  >
 > & {
   nextStepsSourceUid?: string;
+  nextTodoUids?: string[];
+  /** Live Todo rows for display. Not a historical as-of view. */
+  nextTodos?: NextTodoRef[];
   id: number;
   progress?: string;
   externalRef?: string;
@@ -68,7 +82,12 @@ export type StatusEntry = Required<
 
 export type PortableStatusEntry = Omit<
   StatusEntry,
-  "id" | "recordedAt" | "effectiveStatus" | "isCurrent" | "completedBy"
+  | "id"
+  | "recordedAt"
+  | "effectiveStatus"
+  | "isCurrent"
+  | "completedBy"
+  | "nextTodos"
 >;
 
 const keys = new Set([
@@ -79,6 +98,7 @@ const keys = new Set([
   "progress",
   "blockers",
   "nextSteps",
+  "nextTodoUids",
   "nextStepsSourceUid",
   "decisions",
   "tags",
@@ -139,6 +159,15 @@ function textList(value: unknown, field: string): string[] {
   return value.map((item) => text(item, field, true) as string);
 }
 
+function uidList(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.length > 100)
+    throw new ValidationError(`${field} must be an array of at most 100 uuids`);
+  const uids = value.map((item) => validateUid(item));
+  if (new Set(uids).size !== uids.length)
+    throw new ValidationError(`${field} contains a duplicate uid`);
+  return uids;
+}
+
 export function parseTime(value: unknown, field: string): string {
   if (
     typeof value !== "string" ||
@@ -179,7 +208,12 @@ export function validateStatusEntry(
   value: unknown,
   defaultSource: Source = "human",
 ): StatusEntryInput &
-  Required<Pick<StatusEntryInput, "occurredAt" | "source">> {
+  Required<
+    Pick<
+      StatusEntryInput,
+      "occurredAt" | "source" | "nextSteps" | "blockers" | "decisions" | "tags"
+    >
+  > {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new ValidationError("entry must be an object");
   const input = value as Record<string, unknown>;
@@ -207,6 +241,22 @@ export function validateStatusEntry(
   const externalRef = text(input.externalRef, "externalRef");
   if (externalRef && externalRef.length > 200)
     throw new ValidationError("externalRef must be at most 200 characters");
+  const nextSteps = textList(input.nextSteps, "nextSteps");
+  const nextStepsSourceUid =
+    input.nextStepsSourceUid === undefined
+      ? undefined
+      : validateUid(input.nextStepsSourceUid);
+  // null and omission both mean legacy rows: the refs field is absent, not [].
+  const nextTodoUids =
+    input.nextTodoUids === undefined || input.nextTodoUids === null
+      ? undefined
+      : uidList(input.nextTodoUids, "nextTodoUids");
+  if (nextTodoUids !== undefined && nextSteps.length > 0)
+    throw new ValidationError(
+      "cannot combine nextSteps text with nextTodoUids",
+    );
+  if (nextTodoUids !== undefined && nextStepsSourceUid !== undefined)
+    throw new ValidationError("invalid next step provenance");
   return {
     ...(input.uid === undefined ? {} : { uid: validateUid(input.uid) }),
     project,
@@ -214,10 +264,9 @@ export function validateStatusEntry(
     summary: text(input.summary, "summary", true) as string,
     progress: text(input.progress, "progress"),
     blockers: textList(input.blockers, "blockers"),
-    nextSteps: textList(input.nextSteps, "nextSteps"),
-    ...(input.nextStepsSourceUid === undefined
-      ? {}
-      : { nextStepsSourceUid: validateUid(input.nextStepsSourceUid) }),
+    nextSteps,
+    ...(nextTodoUids !== undefined ? { nextTodoUids } : {}),
+    ...(nextStepsSourceUid !== undefined ? { nextStepsSourceUid } : {}),
     decisions: textList(input.decisions, "decisions"),
     tags: textList(input.tags, "tags"),
     occurredAt:
@@ -244,6 +293,8 @@ export function toPortableStatusEntry(entry: StatusEntry): PortableStatusEntry {
   };
   if (entry.nextStepsSourceUid !== undefined)
     result.nextStepsSourceUid = entry.nextStepsSourceUid;
+  if (entry.nextTodoUids !== undefined)
+    result.nextTodoUids = entry.nextTodoUids;
   if (entry.progress !== undefined) result.progress = entry.progress;
   if (entry.externalRef !== undefined) result.externalRef = entry.externalRef;
   return result;
