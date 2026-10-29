@@ -329,8 +329,11 @@ function existingIdentity(
         id: existing.id,
         recordedAt: existing.recordedAt,
       } as StatusEntry);
+      const sameWrite =
+        isDeepStrictEqual(toPortableStatusEntry(existing), candidate) ||
+        textRefEquivalent(db, existing, input);
       if (
-        !isDeepStrictEqual(toPortableStatusEntry(existing), candidate) ||
+        !sameWrite ||
         (recordedAt !== undefined && recordedAt !== existing.recordedAt)
       )
         throw new ValidationError("conflicting entry uid");
@@ -354,6 +357,32 @@ function existingIdentity(
     }
   }
   return undefined;
+}
+
+function textRefEquivalent(
+  db: Ledger,
+  existing: StatusEntry,
+  input: StatusEntryInput & { occurredAt: string; source: Source },
+): boolean {
+  // A text --next retry is the same write as the refs snapshot it produced.
+  if (existing.nextTodoUids === undefined || input.nextTodoUids !== undefined)
+    return false;
+  assert.ok(input.nextSteps);
+  const titles = input.nextSteps;
+  if (titles.length !== existing.nextTodoUids.length) return false;
+  const candidate = toPortableStatusEntry({
+    ...input,
+    nextSteps: [],
+    nextTodoUids: existing.nextTodoUids,
+    id: existing.id,
+    recordedAt: existing.recordedAt,
+  } as StatusEntry);
+  if (!isDeepStrictEqual(toPortableStatusEntry(existing), candidate))
+    return false;
+  return existing.nextTodoUids.every((uid, index) => {
+    const todo = todoByUid(db, uid);
+    return todo !== undefined && todo.title === titles[index];
+  });
 }
 
 export function addStatus(
@@ -466,9 +495,12 @@ function addValidatedStatus(
 
 export function importStatuses(db: Ledger, values: unknown[]): InsertResult[] {
   const inputs = values.map((value) => validateStatusEntry(value, "import"));
-  return db.transaction(() =>
-    inputs.map((input) => addValidatedStatus(db, input)),
-  )();
+  return db.transaction(() => {
+    const results = inputs.map((input) => addValidatedStatus(db, input));
+    for (const result of results)
+      assertSnapshotRefs(db, result.entry.project, result.entry.nextTodoUids);
+    return results;
+  })();
 }
 
 export function current(db: Ledger, project?: string): StatusEntry[] {
@@ -792,11 +824,32 @@ function validateCompletionEvent(value: unknown): CompletionEvent {
   };
 }
 
+function declaredTodoUids(values: unknown[]): Set<string> {
+  const uids = new Set<string>();
+  for (const value of values) {
+    if (!value || typeof value !== "object" || !("todos" in value)) continue;
+    const todos = (value as { todos?: unknown }).todos;
+    if (!Array.isArray(todos)) continue;
+    for (const todo of todos) {
+      if (
+        todo &&
+        typeof todo === "object" &&
+        "uid" in todo &&
+        typeof (todo as { uid?: unknown }).uid === "string"
+      )
+        uids.add((todo as { uid: string }).uid);
+    }
+  }
+  return uids;
+}
+
 export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
   // Both legacy entries and versioned bundles are accepted atomically, including JSONL.
   return db
     .transaction(() => {
       const results: InsertResult[] = [];
+      // Refs must name Todos declared in this payload, not only rows already stored.
+      const payloadTodos = declaredTodoUids(values);
       for (const value of values) {
         if (value && typeof value === "object" && "version" in value) {
           const bundle = record(value, [
@@ -834,7 +887,12 @@ export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
           if (version === 3 || version === 4)
             for (const todo of bundle.todos as unknown[]) importTodo(db, todo);
           for (const entry of imported)
-            assertSnapshotRefs(db, entry.project, entry.nextTodoUids);
+            assertSnapshotRefs(
+              db,
+              entry.project,
+              entry.nextTodoUids,
+              payloadTodos,
+            );
         } else {
           const result = addValidatedStatus(
             db,
@@ -845,6 +903,7 @@ export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
             db,
             result.entry.project,
             result.entry.nextTodoUids,
+            payloadTodos,
           );
         }
       }
@@ -921,9 +980,12 @@ function assertSnapshotRefs(
   db: Ledger,
   project: string,
   uids: string[] | undefined,
+  payloadTodos?: Set<string>,
 ): void {
   if (uids === undefined) return;
   for (const uid of uids) {
+    if (payloadTodos && !payloadTodos.has(uid))
+      throw new ValidationError("dangling next todo uid");
     const todo = todoByUid(db, uid);
     if (!todo) throw new ValidationError("dangling next todo uid");
     if (todo.project !== null && todo.project !== project)

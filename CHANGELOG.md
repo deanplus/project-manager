@@ -17,6 +17,8 @@
 ### Fixed
 
 - Detach the dashboard browser launch so a long-lived browser does not keep the process alive.
+- Reject dangling and cross-project `nextTodoUids` from `importStatuses`, and require imported refs to name Todos in the same payload.
+- Treat a fixed-UID retry of `--next` text as the same write after it has been stored as refs.
 
 ## 0.4.0 - 2026-10-28
 

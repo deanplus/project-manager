@@ -16,6 +16,7 @@ import {
   handleRequest,
   history,
   importLedger,
+  importStatuses,
   listTodos,
   openLedger,
   run,
@@ -1021,5 +1022,206 @@ test("HTTP todo listing accepts a status filter", async () => {
   } finally {
     await server.close();
     if (db.open) db.close();
+  }
+});
+
+test("importStatuses rejects dangling and cross-project refs atomically", () => {
+  const db = openLedger(":memory:");
+  try {
+    setProjectMetadata(db, { project: "beta" });
+    const owned = createTodo(db, { title: "Beta work", project: "beta" });
+    const occurredAt = "2026-07-01T00:00:00.000Z";
+    const keep = {
+      project: "keep",
+      status: "active" as const,
+      summary: "should roll back",
+      occurredAt,
+    };
+    assert.throws(
+      () =>
+        importStatuses(db, [
+          keep,
+          {
+            project: "alpha",
+            status: "active",
+            summary: "dangling",
+            nextTodoUids: [randomUUID()],
+            occurredAt: "2026-07-02T00:00:00.000Z",
+          },
+        ]),
+      /dangling next todo uid/,
+    );
+    assert.equal(history(db).length, 0);
+    assert.throws(
+      () =>
+        importStatuses(db, [
+          keep,
+          {
+            project: "alpha",
+            status: "active",
+            summary: "foreign",
+            nextTodoUids: [owned.uid],
+            occurredAt: "2026-07-02T00:00:00.000Z",
+          },
+        ]),
+      /cross-project next todo ref/,
+    );
+    assert.equal(history(db).length, 0);
+    assert.equal(listTodos(db).length, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("importLedger rejects refs whose Todos are absent from the payload", () => {
+  const entry = {
+    uid: randomUUID(),
+    project: "demo",
+    status: "active" as const,
+    summary: "Pinned locally",
+    nextSteps: [] as string[],
+    occurredAt: "2026-07-03T00:00:00.000Z",
+    recordedAt: "2026-07-03T01:00:00.000Z",
+    source: "import" as const,
+  };
+  const populated = openLedger(":memory:");
+  const empty = openLedger(":memory:");
+  try {
+    const local = createTodo(populated, { title: "Already here" });
+    const bundle = {
+      version: 4 as const,
+      entries: [{ ...entry, nextTodoUids: [local.uid] }],
+      completions: [],
+      todos: [],
+    };
+    const keep = {
+      project: "keep",
+      status: "active" as const,
+      summary: "rolls back",
+      occurredAt: "2026-07-01T00:00:00.000Z",
+    };
+    assert.throws(
+      () => importLedger(populated, [keep, bundle]),
+      /dangling next todo uid/,
+    );
+    assert.equal(history(populated).length, 0);
+    assert.equal(listTodos(populated).length, 1);
+    assert.throws(
+      () =>
+        importLedger(empty, [
+          { version: 4, entries: [], completions: [], todos: null },
+        ]),
+      /invalid ledger bundle/,
+    );
+    assert.throws(
+      () => importLedger(empty, [keep, bundle]),
+      /dangling next todo uid/,
+    );
+    assert.equal(history(empty).length, 0);
+    assert.equal(listTodos(empty).length, 0);
+  } finally {
+    populated.close();
+    empty.close();
+  }
+});
+
+test("fixed-UID text retries match the stored refs without duplicating Todos", () => {
+  const db = openLedger(":memory:");
+  try {
+    const occurredAt = "2026-08-01T00:00:00.000Z";
+    const uid = randomUUID();
+    const input = {
+      uid,
+      project: "demo",
+      status: "active" as const,
+      summary: "Work",
+      nextSteps: ["Alpha", "Beta"],
+      occurredAt,
+    };
+    const first = addStatus(db, input);
+    assert.equal(first.inserted, true);
+    const original = listTodos(db);
+    assert.equal(original.length, 2);
+    updateTodo(db, original[0].uid, { status: "completed" });
+    const retry = addStatus(db, input);
+    assert.equal(retry.inserted, false);
+    assert.equal(retry.entry.uid, uid);
+    assert.equal(listTodos(db).length, 2);
+    assert.deepEqual(
+      listTodos(db).map((todo) => todo.uid),
+      original.map((todo) => todo.uid),
+    );
+    assert.equal(
+      listTodos(db).find((todo) => todo.uid === original[0].uid)?.status,
+      "completed",
+    );
+    const referenced = randomUUID();
+    const withRef = {
+      uid: referenced,
+      project: "demo",
+      status: "active" as const,
+      summary: "Referenced",
+      nextSteps: ["Gamma"],
+      occurredAt: "2026-08-02T00:00:00.000Z",
+      externalRef: "fixed-retry",
+    };
+    assert.equal(addStatus(db, withRef).inserted, true);
+    const second = addStatus(db, withRef);
+    assert.equal(second.inserted, false);
+    assert.equal(second.entry.uid, referenced);
+    assert.equal(listTodos(db).length, 3);
+    const bare = randomUUID();
+    const empty = {
+      uid: bare,
+      project: "demo",
+      status: "active" as const,
+      summary: "Empty",
+      nextSteps: [] as string[],
+      occurredAt: "2026-08-03T00:00:00.000Z",
+    };
+    assert.equal(addStatus(db, empty).inserted, true);
+    assert.equal(addStatus(db, empty).inserted, false);
+    assert.throws(
+      () => addStatus(db, { ...input, summary: "Changed" }),
+      /conflicting entry uid/,
+    );
+    assert.throws(
+      () => addStatus(db, { ...input, nextSteps: ["Alpha"] }),
+      /conflicting entry uid/,
+    );
+    assert.throws(
+      () => addStatus(db, { ...input, nextSteps: ["Alpha", "Other"] }),
+      /conflicting entry uid/,
+    );
+    assert.equal(listTodos(db).length, 3);
+    db.prepare("DELETE FROM todos WHERE uid = ?").run(original[1].uid);
+    assert.throws(() => addStatus(db, input), /conflicting entry uid/);
+    const legacyUid = randomUUID();
+    importStatuses(db, [
+      {
+        uid: legacyUid,
+        project: "old",
+        status: "active",
+        summary: "Legacy",
+        nextSteps: ["Text"],
+        occurredAt: "2026-08-04T00:00:00.000Z",
+      },
+    ]);
+    assert.throws(
+      () =>
+        importStatuses(db, [
+          {
+            uid: legacyUid,
+            project: "old",
+            status: "active",
+            summary: "Changed",
+            nextSteps: ["Text"],
+            occurredAt: "2026-08-04T00:00:00.000Z",
+          },
+        ]),
+      /conflicting entry uid/,
+    );
+  } finally {
+    db.close();
   }
 });

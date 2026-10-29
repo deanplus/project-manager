@@ -270,3 +270,117 @@ Applied the Round 5 wording precision fix. Requirements status remains GO for im
 ### F11 closure
 
 Author closed F11: earlier contradictory summaries aligned; Round 5 precision on “after all source indices are converted” applied. Requirements Status remains GO.
+
+## Round 6 — Post-implementation cross-review (2026-10-29)
+
+Reviewer role: Codex post-implementation cross-review.
+Session ID: `01a185c5-e78f-73c2-bd0c-ee650aa63644` (verified through CODEX_THREAD_ID).
+Branch: `cursor/nextsteps-as-todo-refs-4a65`.
+PR: https://github.com/deanplus/project-manager/pull/1
+Reviewed HEAD: `5835a92d07dc0c29a3152571a442c85f864d412a`.
+Base: `24b8313f2796227b01f5bc2e715f48760b49ec52`.
+Remote PR HEAD was verified to match the local reviewed commit.
+
+**Disposition: NO-GO.** The requirements remain GO, but implementation
+acceptance is blocked by F12–F14 below.
+
+### Requirements and previous-review closure
+
+Read the complete nextSteps requirements and Decisions, review history
+through Round 5/F11 closure, and Independent Todos requirements.
+
+F11 is closed at the documentation level. The Round 5 clarification now
+explicitly requires all source indices to be converted before refs
+materialization. The authoritative legacy transition, format discriminator,
+and all-history ownership rules remain consistent.
+
+Inspected implementation and tests for atomic Todo creation, completion,
+legacy conversion, provenance, import/export, ownership, CLI, HTTP, and
+Dashboard rendering. Selected tests confirm partial-conversion index
+preservation, full-conversion UID/status reuse, immutable snapshots,
+live resolution, ownership locks, and basic import rejection. These
+passing paths do not resolve the following implementation defects.
+
+### Findings
+
+#### F12 / P1 — Public importStatuses bypasses reference integrity checks
+
+Location: `src/db.ts:467–471`; publicly exported through `src/index.ts`.
+
+`importStatuses` validates entry shape but calls `addValidatedStatus`
+without validating Todo existence or project ownership.
+
+In-memory reproduction:
+
+1. Import an entry whose nextTodoUids contains a fresh, nonexistent UUID.
+2. The entry is committed successfully.
+3. `current` reports a fallback Todo with status `open`.
+4. Export the ledger and import it into a fresh database: import fails
+   with `dangling next todo uid`.
+
+A separate reproduction successfully imported an alpha snapshot referencing
+a beta-owned Todo through the same API.
+
+Impact: callers of this public API can persist invalid snapshots and
+produce exports that cannot round-trip. The CLI uses `importLedger`, so
+this particular bypass is a public API defect rather than its CLI path.
+
+Required correction: apply shared reference validation atomically on
+every import entry point, or explicitly reject ref-bearing entries in
+the legacy-only API. Add rollback tests for dangling and cross-project
+refs through `importStatuses`.
+
+#### F13 / P2 — Import dependencies need not be present in the payload
+
+Location: `src/db.ts:834–837`, `src/db.ts:920–930`.
+Contract: nextSteps requirements line 74.
+
+`importLedger` checks references against existing database rows without
+requiring the referenced Todo to appear in the incoming payload.
+
+In-memory reproduction: create an unassigned Todo locally, then import
+a version-4 bundle containing a snapshot referencing it but `todos: []`.
+Import succeeds. The identical bundle fails against a fresh database.
+
+Impact: incomplete imports are accepted depending on destination state,
+contrary to the explicit same-payload dependency requirement.
+
+Required correction: validate payload membership as well as database
+existence and ownership, within the batch transaction. Test an omitted
+dependency against both empty and populated databases; both must reject
+and roll back.
+
+#### F14 / P2 — Caller-supplied UID retries conflict after text conversion
+
+Location: `src/db.ts:324–336`, `src/db.ts:370–387`.
+
+`addStatus` compares the original text-shaped request against the stored
+refs-shaped snapshot before normalizing a replay. An identical retry
+therefore fails with `conflicting entry uid`.
+
+Reproduced with a fixed uid, occurredAt, externalRef, and nextSteps.
+Baseline `24b8313` returns `inserted=false` on retry; reviewed HEAD throws.
+Providing externalRef does not help because UID comparison runs first.
+
+Impact: existing public API callers lose idempotent retries after a
+successful write. ExternalRef-only CLI retries remain functional.
+
+Required correction: recognize equivalent retries across text-to-ref
+conversion while retaining genuine identity-conflict rejection. Test
+fixed-UID retries with and without externalRef, preserving Todo count,
+UIDs, and statuses.
+
+### Evidence and scope
+
+- 18 selected existing tests passed using SQLite `:memory:` and VM-based
+  UI checks, with the tsx cache disabled.
+- TypeScript `--noEmit` and ESLint passed.
+- Independent in-memory assertions reproduced F12 and F13.
+- An in-memory comparison using baseline source and reviewed HEAD
+  reproduced the F14 regression.
+- Full filesystem-writing tests, disk migration tests, build, coverage,
+  and real-browser verification were not run.
+- No files, project-ledger records, commits, or deployments were changed.
+  Existing untracked review evidence was left untouched.
+
+**NO-GO — fix F12–F14 and rerun targeted cross-review before implementation acceptance.**
