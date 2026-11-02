@@ -465,3 +465,7 @@ pmgr --version
 ### Disposition
 
 **GO for the code** (F2–F4 and N1–N3 closed, all gates green). **The release is incomplete:** F5 waits on npm authentication. No real-ledger change or `todo-convert --all` was performed.
+
+### Round 8 addendum — local install correction
+
+The global `pmgr` (`~/.nvm/versions/node/v22.23.1/lib/node_modules/project-mgr`) is an `npm link` symlink to this repository. The `pnpm build` above therefore already upgraded it: `pmgr --version` now prints **`0.5.1`**, built from `67fcadd`. `pmgr help next` and `pmgr help add` (neither opens the database) show the new command and flags. The release-record row "Local global `pmgr`: 0.5.0" is superseded: the local CLI is **0.5.1 (linked build)**. npm publish is still blocked on E401, so F5 remains open only for the registry publish. The link was kept; no `npm i -g` was needed.
