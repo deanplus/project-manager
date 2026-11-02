@@ -400,3 +400,68 @@ Option 2 was briefly implemented in an earlier author turn. Those changes have b
 **L2 CLOSED via option 1: documented limitation.** First-occurrence carry ordering and strict-suffix retry identity remain in force. The fixed-UID carried re-pin retry conflict is accepted; CLI writes do not pass fixed UIDs, and external-ref replay remains unaffected. Round 5–6 retain their effective closure/GO; this round does not introduce a new implementation decision.
 
 No stage, commit, push, npm publication, or production-ledger mutation. Pre-existing uncommitted worktree changes are preserved.
+
+## Round 8 — Follow-up fixes and 0.5.1 release record (2026-11-02)
+
+Author: Claude Code (Opus), session `9e1f55a8-c7d2-4e5f-a698-72de8f1f3b55`, acting as implementer under the user's release authorization (via 待办). This session also reviewed Rounds 2/4/6, so this round is self-reported and has no independent cross-review.
+Constraints honored:
+
+- L2 stays option 1: first-occurrence carry and strict-suffix retry are unchanged, and the `R4.5 strict suffix…` test still expects `conflicting entry uid`.
+- F1 guard unchanged (`input.nextTodoUids !== undefined`).
+- The real ledger was not opened. `todo-convert --all` was not run.
+
+### Follow-ups
+
+- **F2 — CLOSED.**
+  - Change: exact-title reuse candidates now include unassigned open Todos in P's current pins, alongside open Todos with `project = P`. Ordering is unchanged (pins first, then `createdAt, uid`), and reuse never changes ownership.
+  - Regression `F2: exact-title reuse includes unassigned Todos pinned by the project`. It also asserts that an unpinned unassigned Todo is not reused.
+  - Docs updated: requirements R4.4, README, SKILL, architecture, CHANGELOG.
+- **F3 — CLOSED.** The `README_CN.md` Todo/open-work section is rewritten in Chinese in the file's one-sentence-per-line style. The Chinese example summaries are restored, and the L2 limitation is noted in Chinese. No English prose is left in the diff.
+- **F4 — CLOSED.**
+  - New `openWorkByProject(db, project?)` builds per-project groups from one `current()` call and one Todo scan. `openWork` keeps its earlier semantics: a project query is per-project; a global query dedupes shared pins (first project wins) and appends unassigned Todos.
+  - CLI `current` uses one grouped scan instead of calling `openWork` for each project.
+  - Regression `F4: CLI current groups one open-work scan with per-project semantics` asserts each entry's `openWork` deep-equals `openWork(db, project)`, including a Todo pinned by two projects.
+- **F5 — PARTIAL (blocked on npm auth).** Version bumped to `0.5.1`, CHANGELOG folded into `0.5.1 - 2026-11-02`, `pnpm build` succeeded (`node dist/cli.js --version` prints `0.5.1`), committed and pushed. **npm publish not performed:** `npm whoami` returns `E401 Unauthorized` against `https://registry.npmjs.org/` (checked twice). Global install of `0.5.1` was therefore not performed either; the global `pmgr` is still `0.5.0`. This stays open until the user logs in to npm.
+- **N1 — CLOSED.** R4.5 first bullet now reads "…idempotent in carry mode, except the L2 case below."
+- **N2 — CLOSED.** Requirements status is now "Accepted and implemented — GO in review Rounds 5–6; follow-ups … closed in Round 8 (release 0.5.1)". Since publish is blocked, F5 is in fact partial.
+- **N3 — CLOSED.** `docs/architecture.md` has a "Known limitation (L2)" paragraph, and the CHANGELOG already carried the L2 note.
+
+### Additional changes
+
+- **Coverage gate.** `pnpm coverage` (100% threshold) failed on the uncommitted Round 1–7 work. Gaps:
+  - unreachable fallbacks: the legacy pin `latest ? … : []`, `groups.get(...) ?? []`, and the converted Todo `project ?? "-"`;
+  - untested text-mode branches in `next`, `current`, and `todo-convert`;
+  - the non-object `addStatus` guard.
+
+  Fix: removed the unreachable fallbacks (non-null assertions with a comment on the legacy branch) and added two CLI tests (`todo-convert text output…`, `text next and current cover…`). Coverage is now 100% statements, branches, functions, and lines.
+
+- **Formatting.** `prettier --write` was applied to the requirements doc and to this review file. This normalized whitespace and table padding in earlier rounds; content was not changed. It was needed for `pnpm format-check` to pass on the committed files.
+
+### Verification
+
+- `pnpm test`: **63/63 pass**.
+- `pnpm coverage`: 100% across all metrics.
+- `tsc --noEmit` passed, `eslint .` passed, `pnpm format-check` passed, and `git diff --check` passed.
+- `pnpm build` produced `dist/cli.js`, which reports `0.5.1`.
+- `npm pack --dry-run`: `project-mgr@0.5.1`, 29 files.
+
+### Release record
+
+| Item                | Value                                                   |
+| ------------------- | ------------------------------------------------------- |
+| Version             | `0.5.1`                                                 |
+| Release commit      | `67fcadd` (pushed to `origin/main`, `6afd261..67fcadd`) |
+| npm publish         | **Not done**: `npm whoami` returns E401 (not logged in) |
+| Local global `pmgr` | `0.5.0` (unchanged; install deferred until publish)     |
+
+To finish F5 after the user logs in (`npm login`):
+
+```sh
+npm publish
+npm i -g project-mgr@0.5.1
+pmgr --version
+```
+
+### Disposition
+
+**GO for the code** (F2–F4 and N1–N3 closed, all gates green). **The release is incomplete:** F5 waits on npm authentication. No real-ledger change or `todo-convert --all` was performed.
