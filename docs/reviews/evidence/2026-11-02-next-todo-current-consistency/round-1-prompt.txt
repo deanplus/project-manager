@@ -1,0 +1,19 @@
+You are the independent Claude Code reviewer for this implementation. Read-only review: do not modify files, stage, commit, push, deploy, start another reviewer, or write project status. Do not read/output .env, credentials, private keys, tokens, authentication/session data, production logs, or databases. Do not read ~/.claude, ~/.codex, or other agent session material. Do not access the real ledger. Do not use network tools. English report.
+
+Original user request and acceptance constraints:
+实现任务：Next-Todo / current consistency（新会话，不要 resume 旧会话）。
+必读（已 GO）：docs/requirements/next-todo-current-consistency.md（完整实现，含 R1–R4、测试、CHANGELOG）；docs/reviews/2026-11-02-next-todo-current-consistency.md（Round 0）。
+严格按需求实现，包括 openWork 域函数 + 导出；pmgr next、current --json 的 openWork；add 默认沿用钉选；--replace-next / --done-todo / --cancel-todo；同标题复用（R4.4）；todo-convert；底层默认保持 replace；CLI 行为按 R4 变更；测试与 CHANGELOG。
+不要 commit / push / 发布 npm；不要改真实账本 ~/.local/share/project-mgr/project-mgr.sqlite（测试只用临时 DB / :memory:）；不要做 O5（开始/截止时间、改 title/content）；不要自动 cancel 旧 Todo（M3）；不擅自扩大 scope。
+先读用户级 ~/.agents/AGENTS.md 与本仓 AGENTS.md；最小改动；改完跑相关测试；实现后追加 Round 1 作者侧实现笔记（文件、测试、偏差/澄清、HEAD/diff）。
+
+Authority: read the FULL requirements and Round 0 at the paths above. Repository /Users/dwong/mydoc/code/projects/project-mgr; HEAD 6afd261. Exact scope: git diff HEAD -- src/db.ts src/cli.ts README.md README_CN.md skills/project-mgr/SKILL.md docs/architecture.md CHANGELOG.md; plus untracked test/open-work.test.ts. Requirements directory and Round 0 review document were already untracked before this implementation; preserve them. No staged changes. The evidence directory docs/reviews/evidence/2026-11-02-next-todo-current-consistency is generated audit material and is excluded from code findings. No Round 1 author notes yet. Read related unchanged src/domain.ts, src/index.ts, src/server.ts and tests/RFCs as needed. Files/code comments/docs added by agents must be English per project instructions, including additions to README_CN.md.
+
+Build your own judgment from original requirements and actual code. Read complete changed files and relevant callers/consumers. Check transactional rollback, identity replay/retry equivalence, pin/legacy ordering and lifecycle status, strict import/export compatibility, exact-title reuse, CLI flags/help/format, and tests against ALL 15 acceptance items. Prioritize runnable minimal repros if possible, but this invocation grants only read/search/git tools; report any validation limits and give precise coder-run reproductions. Do not infer passing tests. Do not read sensitive paths. Do not recursively spawn reviews.
+
+Return:
+1. Reviewer, actual model and effort (unknown if not verified).
+2. Review status complete or limited, incomplete work and how to complete it.
+3. Coverage, commands actually executed/results or limits.
+4. Stable finding IDs, severity, issue, trigger/impact, exact path/line evidence, suggested fix. Mark unsupported suspicions unverifiable. Explicitly say when no valid findings.
+5. Unrelated pre-existing issues separately.

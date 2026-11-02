@@ -109,8 +109,8 @@ Migration 3 backfills random UUIDs and rejects inserts lacking a UUID, so old wr
 `todos` stores stable UUIDs, title, optional project/source UUID, optional legacy
 step index, status, creation time, and completion time. Source links constrain
 project ownership. A unique source/index pair makes conversion retry-safe.
-New `addStatus` calls with `--next` text create Todos and `nextTodoUids` in the
-same transaction and leave string `nextSteps` empty. Imports do not implicitly
+New `addStatus` calls with next-step text create or reuse exact-title open Todos
+and store `nextTodoUids` in the same transaction, leaving string `nextSteps` empty. Imports do not implicitly
 create work. Legacy rows keep string `nextSteps` and leave `next_todo_uids_json`
 NULL. Todos are editable current state, while activity snapshots and their
 completion events remain append-only. Version-3 bundles include Todos without
@@ -134,3 +134,49 @@ after export/import; copying context never creates a second conversion identity.
 
 `current` and `history` add `nextTodos`, a live resolution of stored refs.
 `at` returns the stored snapshot only, so resolved titles there are not historical.
+
+## Current open work and CLI carry behavior
+
+`openWork(db, project?)`, exported through `src/index.ts`, is the shared read
+model behind the canonical daily checklist `pmgr next --json`. Never combine
+`nextSteps`, `nextTodos`, and `todos` manually. For each project it emits open
+pins in index order, converted legacy Todos or unconverted `legacy-step` items,
+then other open project Todos ordered by `createdAt, uid`. A Todo appears once.
+Global output follows `current()` order; projects with Todos but no snapshot
+follow in slug order, then unassigned unpinned open Todos. A pinned unassigned
+Todo is grouped under the pinning project without changing its stored ownership;
+if multiple current projects pin it, the first project in current order wins.
+Reads never create work. Only CLI `current` adds `openWork`; historical reads,
+server/dashboard contracts, schema, and portable exports remain unchanged.
+
+Before `add`, agents run `pmgr next --project P --json`: keep work by doing
+nothing, finish it with `--done-todo`, retire superseded work with `--cancel-todo`,
+and use `--next` only for new actions. Status prose belongs in summary/progress;
+blockers belong in `--blocker`. No age- or similarity-based cancellation occurs.
+
+The domain `addStatus` accepts write-only `nextMode` and `closeTodos` options.
+Its default remains `replace`; imports reject these non-portable fields. CLI
+`add` now passes `carry`, so a plain write keeps open pins instead of clearing
+them. `--replace-next` explicitly replaces pins, including clearing with no
+next work, and never closes Todos. Inside one immediate transaction, identity
+replays return first, validated closures use `updateTodo`, carried pins filter
+open status, and resolved UIDs keep first-occurrence order when already carried. Exact-title
+reuse considers prior open Todos of the project plus unassigned open Todos in
+its current pins, preferring pins, then `createdAt, uid`; provenance and
+ownership stay unchanged. Repeated new titles within the write still create
+separate Todos. Fixed-UID carry retries compare stored pins and titles rather
+than recomputing from current Todo statuses; portable imports retain strict
+equality.
+
+Known limitation (L2): first-occurrence order means a carry write that re-names
+an already-carried pin does not end the stored list with that uid. An identical
+fixed-UID retry of such a write therefore throws `conflicting entry uid`. This
+is accepted: CLI writes never pass fixed UIDs, and `--external-ref` replays are
+unaffected. Carry order and the strict-suffix rule are intentionally unchanged.
+
+Partially converted legacy carry writes preserve all strings and their effective
+source UID. New next work requires `todo-convert` or `--replace-next`. CLI
+`todo-convert --entry <ref> --index <n>`, `--project P`, and `--all` use the
+existing idempotent conversion function without appending a snapshot. Once all
+indices are converted, the next carry write materializes open refs in index
+order. `completeActivity` retains its existing pin-copying semantics.

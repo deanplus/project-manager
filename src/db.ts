@@ -22,6 +22,30 @@ import {
 
 export type Ledger = Database.Database;
 export type InsertResult = { entry: StatusEntry; inserted: boolean };
+export type AddStatusInput = StatusEntryInput & {
+  nextMode?: "carry" | "replace";
+  closeTodos?: { uid: string; status: "completed" | "cancelled" }[];
+};
+export type OpenWorkItem =
+  | {
+      kind: "todo";
+      uid: string;
+      title: string;
+      project: string | null;
+      pinned: boolean;
+      pinIndex: number | null;
+      createdAt: string;
+      entryUid: string | null;
+    }
+  | {
+      kind: "legacy-step";
+      project: string;
+      entryUid: string;
+      stepIndex: number;
+      title: string;
+      pinned: true;
+      pinIndex: number;
+    };
 export type HistoryOptions = {
   since?: string;
   until?: string;
@@ -321,6 +345,7 @@ function existingIdentity(
   input: StatusEntryInput & { occurredAt: string; source: Source },
   recordedAt?: string,
   textRetry = false,
+  carry = false,
 ): InsertResult | undefined {
   if (input.uid) {
     const existing = one(db, `${select} WHERE e.uid = ?`, input.uid);
@@ -333,7 +358,7 @@ function existingIdentity(
       // Text/ref equivalence is only for addStatus sugar retries, not imports.
       const sameWrite =
         isDeepStrictEqual(toPortableStatusEntry(existing), candidate) ||
-        (textRetry && textRefEquivalent(db, existing, input));
+        (textRetry && textRefEquivalent(db, existing, input, carry));
       if (
         !sameWrite ||
         (recordedAt !== undefined && recordedAt !== existing.recordedAt)
@@ -365,13 +390,31 @@ function textRefEquivalent(
   db: Ledger,
   existing: StatusEntry,
   input: StatusEntryInput & { occurredAt: string; source: Source },
+  carry = false,
 ): boolean {
-  // A text --next retry is the same write as the refs snapshot it produced.
-  if (existing.nextTodoUids === undefined || input.nextTodoUids !== undefined)
-    return false;
+  // Retry against stored pins, never today's open status or latest snapshot.
+  if (existing.nextTodoUids === undefined) {
+    if (!carry || input.nextTodoUids !== undefined || input.nextSteps?.length)
+      return false;
+    return isDeepStrictEqual(
+      toPortableStatusEntry(existing),
+      toPortableStatusEntry({
+        ...input,
+        nextSteps: existing.nextSteps,
+        nextStepsSourceUid: existing.nextStepsSourceUid,
+      } as StatusEntry),
+    );
+  }
+  if (!carry && input.nextTodoUids !== undefined) return false;
   assert.ok(input.nextSteps);
   const titles = input.nextSteps;
-  if (titles.length !== existing.nextTodoUids.length) return false;
+  const size = input.nextTodoUids?.length ?? titles.length;
+  if (
+    carry
+      ? size > existing.nextTodoUids.length
+      : size !== existing.nextTodoUids.length
+  )
+    return false;
   const candidate = toPortableStatusEntry({
     ...input,
     nextSteps: [],
@@ -381,7 +424,12 @@ function textRefEquivalent(
   } as StatusEntry);
   if (!isDeepStrictEqual(toPortableStatusEntry(existing), candidate))
     return false;
-  return existing.nextTodoUids.every((uid, index) => {
+  const suffix = existing.nextTodoUids.slice(
+    existing.nextTodoUids.length - size,
+  );
+  return suffix.every((uid, index) => {
+    if (input.nextTodoUids !== undefined)
+      return uid === input.nextTodoUids[index];
     const todo = todoByUid(db, uid);
     return todo !== undefined && todo.title === titles[index];
   });
@@ -393,25 +441,121 @@ export function addStatus(
   defaultSource: Source = "human",
   completes: string[] = [],
 ): InsertResult {
-  const input = validateStatusEntry(value, defaultSource);
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new ValidationError("entry must be an object");
+  const {
+    nextMode = "replace",
+    closeTodos = [],
+    ...fields
+  } = value as Record<string, unknown>;
+  if (nextMode !== "carry" && nextMode !== "replace")
+    throw new ValidationError("invalid nextMode");
+  if (!Array.isArray(closeTodos))
+    throw new ValidationError("closeTodos must be an array");
+  const input = validateStatusEntry(fields, defaultSource);
   if (input.nextStepsSourceUid)
     throw new ValidationError("new snapshots cannot set nextStepsSourceUid");
   return db
     .transaction(() => {
-      const replay = existingIdentity(db, input, undefined, true);
+      const replay = existingIdentity(
+        db,
+        input,
+        undefined,
+        true,
+        nextMode === "carry",
+      );
       if (replay) {
         linkCompletions(db, completes, replay.entry.uid, input.source);
         return replay;
       }
-      if (input.nextTodoUids !== undefined) {
-        assertSnapshotRefs(db, input.project, input.nextTodoUids);
-        const result = addValidatedStatus(db, { ...input, nextSteps: [] });
+      const latest = current(db, input.project)[0];
+      const preserved = latest
+        ? preservedNextWork(db, latest)
+        : { nextSteps: [], nextTodoUids: [] };
+      // Without refs, latest is a pending legacy snapshot: pin its converted indices.
+      const legacy =
+        preserved.nextTodoUids === undefined
+          ? legacySource(db, latest!)
+          : undefined;
+      const pins =
+        preserved.nextTodoUids ??
+        legacy!.nextSteps.flatMap((_, index) => {
+          const todo = stepTodo(db, legacy!.uid, index);
+          return todo ? [todo.uid] : [];
+        });
+      const closing = new Map<string, "completed" | "cancelled">();
+      for (const value of closeTodos) {
+        const close = record(value, ["uid", "status"]);
+        const uid = validateUid(close.uid);
+        if (close.status !== "completed" && close.status !== "cancelled")
+          throw new ValidationError("invalid closeTodos status");
+        if (
+          (closing.has(uid) && closing.get(uid) !== close.status) ||
+          input.nextTodoUids?.includes(uid)
+        )
+          throw new ValidationError(
+            "cannot close a Todo in both statuses or also pin it",
+          );
+        const todo = todoByUid(db, uid);
+        if (!todo || (todo.project !== input.project && !pins.includes(uid)))
+          throw new ValidationError(
+            `todo ${uid} does not belong to project ${input.project} or its current pins`,
+          );
+        closing.set(uid, close.status);
+      }
+      for (const [uid, status] of closing) updateTodo(db, uid, { status });
+      if (nextMode === "carry" && preserved.nextTodoUids === undefined) {
+        if (input.nextSteps.length || input.nextTodoUids !== undefined)
+          throw new ValidationError(
+            `project ${input.project} has unconverted legacy next steps; run pmgr todo-convert --project ${input.project} or pass --replace-next`,
+          );
+        const result = addValidatedStatus(db, { ...input, ...preserved });
         linkCompletions(db, completes, result.entry.uid, input.source);
         return result;
       }
-      // Text --next sugar: one new Todo per title, stored only as refs.
+      if (input.nextTodoUids !== undefined)
+        assertSnapshotRefs(db, input.project, input.nextTodoUids);
+      // Freeze candidates before creating this write's Todos: repeated new titles stay separate.
+      // Same-project open Todos plus unassigned open Todos already pinned here.
+      const candidates = [
+        ...listTodos(db, input.project, { status: "open" }),
+        ...pins.flatMap((pin) => {
+          const todo = todoByUid(db, pin);
+          return todo?.project === null && todo.status === "open" ? [todo] : [];
+        }),
+      ];
+      candidates.sort(
+        (a, b) =>
+          Number(pins.includes(b.uid)) - Number(pins.includes(a.uid)) ||
+          a.createdAt.localeCompare(b.createdAt) ||
+          a.uid.localeCompare(b.uid),
+      );
       const uid = input.uid ?? randomUUID();
-      const nextTodoUids = input.nextSteps.map(() => randomUUID());
+      const newTodos: { uid: string; title: string }[] = [];
+      const resolved =
+        input.nextTodoUids ??
+        input.nextSteps.map((title, index) => {
+          const match =
+            input.nextSteps.indexOf(title) === index
+              ? candidates.find((todo) => todo.title === title)
+              : undefined;
+          if (match) return match.uid;
+          const uid = randomUUID();
+          newTodos.push({ uid, title });
+          return uid;
+        });
+      const nextTodoUids = [
+        ...new Set([
+          ...(nextMode === "carry"
+            ? pins.filter((uid) => todoByUid(db, uid)?.status === "open")
+            : []),
+          ...resolved,
+        ]),
+      ];
+      if (nextTodoUids.length > 100)
+        throw new ValidationError(
+          "nextTodoUids must be an array of at most 100 uuids",
+        );
       const recordedAt = new Date().toISOString();
       const result = addValidatedStatus(
         db,
@@ -419,13 +563,14 @@ export function addStatus(
         recordedAt,
       );
       assert.equal(result.inserted, true);
-      input.nextSteps.forEach((title, index) => {
+      newTodos.forEach(({ uid, title }) => {
         insertTodo(db, {
-          uid: nextTodoUids[index],
+          uid,
           title,
           project: result.entry.project,
           entryUid: result.entry.uid,
-          stepIndex: index,
+          // Provenance indexes the final snapshot, including carried/reused pins.
+          stepIndex: nextTodoUids.indexOf(uid),
           status: "open",
           createdAt: recordedAt,
           completedAt: null,
@@ -520,6 +665,107 @@ export function current(db: Ledger, project?: string): StatusEntry[] {
     )
     .all(...(project ? [project] : [])) as Record<string, unknown>[];
   return rows.map((row) => annotateEntry(db, entryFromRow(row)));
+}
+
+/** Per-project open work from one current() and one Todo scan; no cross-project dedupe. */
+export function openWorkByProject(
+  db: Ledger,
+  project?: string,
+): { groups: Map<string, OpenWorkItem[]>; unassigned: Todo[] } {
+  const latest = current(db, project);
+  const byProject = new Map<string, Todo[]>();
+  const unassigned: Todo[] = [];
+  for (const todo of listTodos(db, project)) {
+    if (todo.project === null) unassigned.push(todo);
+    else
+      byProject.set(todo.project, [
+        ...(byProject.get(todo.project) ?? []),
+        todo,
+      ]);
+  }
+  const names =
+    project !== undefined
+      ? [project]
+      : [
+          ...latest.map((entry) => entry.project),
+          ...[...byProject.keys()]
+            .filter((name) => !latest.some((entry) => entry.project === name))
+            .sort(),
+        ];
+  const groups = new Map<string, OpenWorkItem[]>();
+  for (const name of names) {
+    const items: OpenWorkItem[] = [];
+    const seen = new Set<string>();
+    const add = (todo: Todo, pinIndex: number | null) => {
+      if (todo.status !== "open" || seen.has(todo.uid)) return;
+      seen.add(todo.uid);
+      items.push({
+        kind: "todo",
+        uid: todo.uid,
+        title: todo.title,
+        project: name,
+        pinned: pinIndex !== null,
+        pinIndex,
+        createdAt: todo.createdAt,
+        entryUid: todo.entryUid,
+      });
+    };
+    const entry = latest.find((entry) => entry.project === name);
+    if (entry?.nextTodoUids !== undefined) {
+      entry.nextTodoUids.forEach((uid, index) => {
+        const todo = todoByUid(db, uid);
+        if (todo) add(todo, index);
+      });
+    } else if (entry) {
+      const source = legacySource(db, entry);
+      source.nextSteps.forEach((title, index) => {
+        const todo = stepTodo(db, source.uid, index);
+        if (todo) add(todo, index);
+        else
+          items.push({
+            kind: "legacy-step",
+            project: name,
+            entryUid: source.uid,
+            stepIndex: index,
+            title,
+            pinned: true,
+            pinIndex: index,
+          });
+      });
+    }
+    for (const todo of byProject.get(name) ?? []) add(todo, null);
+    groups.set(name, items);
+  }
+  return { groups, unassigned };
+}
+
+export function openWork(db: Ledger, project?: string): OpenWorkItem[] {
+  const { groups, unassigned } = openWorkByProject(db, project);
+  if (project !== undefined) return groups.get(project)!;
+  // Globally, a Todo pinned by several projects appears only under the first.
+  const items: OpenWorkItem[] = [];
+  const seen = new Set<string>();
+  for (const group of groups.values())
+    for (const item of group) {
+      if (item.kind === "todo") {
+        if (seen.has(item.uid)) continue;
+        seen.add(item.uid);
+      }
+      items.push(item);
+    }
+  for (const todo of unassigned)
+    if (todo.status === "open" && !seen.has(todo.uid))
+      items.push({
+        kind: "todo",
+        uid: todo.uid,
+        title: todo.title,
+        project: null,
+        pinned: false,
+        pinIndex: null,
+        createdAt: todo.createdAt,
+        entryUid: todo.entryUid,
+      });
+  return items;
 }
 
 export function history(

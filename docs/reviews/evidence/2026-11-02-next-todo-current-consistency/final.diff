@@ -1,0 +1,1660 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 4a56ff2..6d882e9 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,19 @@
+ # Changelog
+ 
++## Unreleased
++
++### Added
++
++- Export `openWork(db, project?)` and expose it through `pmgr next` / `pmgr status next`, combining open pins, unpinned Todos, and unconverted legacy steps.
++- Add live `openWork` to CLI `current --json` and show open work with pin markers in text mode. Historical reads retain their previous shape.
++- Add repeatable `add --done-todo` / `--cancel-todo` for atomic closures and `todo-convert` by entry/index, project, or all current legacy sources.
++
++### Changed
++
++- **CLI behavior change:** plain `add` now keeps open pins; `--next` and `--next-todo` append. Use `--replace-next` to replace or clear pins without changing Todo status. Domain `addStatus` still defaults to replace; imports/exports stay unchanged.
++- Reuse prior same-project open Todos for exact trimmed `--next` titles, preferring pinned work, then the oldest Todo, while preserving provenance. Duplicate new titles in one write still create separate Todos.
++- Make `pmgr next --json` the daily checklist and guide agents to keep, finish, or explicitly retire work before adding new actions. Legacy carry preserves unconverted strings until explicit conversion. No automatic cancellation.
++
+ ## 0.5.0 - 2026-10-29
+ 
+ ### Added
+diff --git a/README.md b/README.md
+index d63d216..6e37246 100644
+--- a/README.md
++++ b/README.md
+@@ -337,9 +337,12 @@ Independently migrated copies of legacy data receive different UUIDs. Cross-impo
+ ### Todos and dashboard actions
+ 
+ Todos own actionable work. A new status snapshot stores ordered `nextTodoUids`
+-and does not persist next-step prose. `add --next` creates one Todo per title
+-and stores those UIDs in the same transaction. Repeating the same text on a
+-later snapshot creates new Todos; pass `--next-todo` to keep existing work.
++and does not persist next-step prose. CLI `add` now carries open pins by default;
++plain `add` no longer clears them, and `--next` appends new work. An exact,
++case-sensitive title (after trimming) reuses a prior open Todo in that project,
++preferring a current pin, then the oldest Todo. Provenance stays unchanged.
++Duplicate new titles within one write still create separate Todos.
++Use `--next-todo` to pin an existing UID explicitly.
+ Do not combine `--next` with `--next-todo`. Duplicate UIDs in one list are rejected.
+ 
+ ```sh
+@@ -348,28 +351,48 @@ pmgr add --project demo --status active --summary "Review queued" \
+ pmgr todo-add --title "Unassigned idea" --json
+ pmgr add --project demo --status active --summary "Pin the idea" \
+   --next-todo <todo-uuid> --source agent --json
+-pmgr todos --project demo --status open --json
++pmgr next --project demo --json
+ pmgr todo-update --uid <todo-uuid> --status completed --json
+ pmgr todo-update --uid <todo-uuid> --status cancelled --json
+ ```
+ 
+-`todos --status open` answers open work from Todos, not from string next steps.
+-With `--project`, UIDs pinned on the current snapshot are ordered first.
+-Completing or cancelling a Todo updates every resolved view and does not rewrite
+-snapshots. Omitting a UID from a newer snapshot unpins it and does not change
+-the Todo status.
+-
+-Legacy snapshots keep string `nextSteps` and omit `nextTodoUids`. Convert each
+-index explicitly; conversion does not append a snapshot. While any source index
+-is still unconverted, a completion follow-up copies the full string list and
+-`nextStepsSourceUid`. After every index has a Todo, the follow-up materializes
+-`nextTodoUids` in source-index order and does not create Todos or change status.
+-A snapshot never stores both prose and refs.
+-
+-`current` and `history` include stored `nextTodoUids` plus live `nextTodos`
+-(`uid`, `title`, `status`, `project`). That view is the Todo now, not its state
+-at the snapshot time. `at` returns the stored snapshot, including refs when
+-present, and does not add the live view.
++The canonical daily checklist is `pmgr next --json` (also `pmgr status next`).
++Do not combine `nextSteps`, `nextTodos`, and `todos` by hand. Before every `add`,
++run `pmgr next --project P --json` and decide each item: keep it (do nothing;
++existing pins carry), finish it with `--done-todo <uid>`, or retire superseded
++work with `--cancel-todo <uid>`. Both close flags are repeatable and run in the
++same transaction as the snapshot. Unpinned work remains visible in the backlog.
++Use `--next` only for new actions, never status descriptions; put blockers in
++`--blocker`. No Todo is automatically cancelled by age or similarity.
++
++`--replace-next` restores replacement behavior: without next work it unpins
++everything; with next work it pins only those UIDs. It never closes Todos.
++The domain `addStatus` API still defaults to `nextMode: "replace"`; CLI `add`
++passes `"carry"` unless `--replace-next` is present. Imports stay strict.
++
++Legacy snapshots retain strings until explicitly converted. A plain carry-mode
++`add` preserves the full legacy list and `nextStepsSourceUid` while any index is
++unconverted; adding new next work then requires conversion or `--replace-next`.
++Conversion is idempotent and appends no snapshot:
++
++```sh
++pmgr todo-convert --entry <id-or-uid> --index 0 --json
++pmgr todo-convert --project demo --json
++# Back up before an explicit, user-run conversion of every current legacy source.
++pmgr export --format json > backup.json
++pmgr todo-convert --all --json
++```
++
++Once all source indices have Todos, the next carry-mode `add` materializes refs
++in index order, filtering out closed Todos. Historical snapshots stay unchanged.
++`next` combines converted Todos and unconverted strings without duplicates.
++
++`current --json` adds live `openWork` for each project's checklist, while its
++stored `nextSteps`, `nextTodoUids`, and live `nextTodos` retain their previous
++meaning, including closed pins. Text `current` prints open work with `[pinned]`
++markers. `history`, `at`, and `getEntry` do not gain `openWork`; `history` text
++and `completeActivity` follow-up copying stay unchanged. `at` returns stored
++snapshots without live Todo resolution.
+ 
+ A snapshot may reference Todos that are unassigned or already in that project.
+ If a Todo appears in any `nextTodoUids`, or is linked to a source entry, its
+diff --git a/README_CN.md b/README_CN.md
+index 3c9ed2a..06761bc 100644
+--- a/README_CN.md
++++ b/README_CN.md
+@@ -334,35 +334,63 @@ pmgr revoke-completion --entry 12 --by 18 --reason "验收仍未完成" --source
+ 
+ ### 待办与仪表板操作
+ 
+-待办是具体工作的来源。新的状态快照按顺序存储 `nextTodoUids`，不再把下一步原文写入快照。
+-`add --next` 会为每条标题创建一个待办，并在同一事务里写入这些 UID。
+-之后的快照如果再次输入相同文本，会创建新的待办；要沿用已有工作，请传 `--next-todo`。
+-不要把 `--next` 和 `--next-todo` 写在同一次 `add` 里。同一列表里的重复 UID 会被拒绝。
++Todos own actionable work. A new status snapshot stores ordered `nextTodoUids`
++and does not persist next-step prose. CLI `add` now carries open pins by default;
++plain `add` no longer clears them, and `--next` appends new work. An exact,
++case-sensitive title (after trimming) reuses a prior open Todo in that project,
++preferring a current pin, then the oldest Todo. Provenance stays unchanged.
++Duplicate new titles within one write still create separate Todos.
++Use `--next-todo` to pin an existing UID explicitly.
++Do not combine `--next` with `--next-todo`. Duplicate UIDs in one list are rejected.
+ 
+ ```sh
+-pmgr add --project demo --status active --summary "已排队复查" \
+-  --next "收集日志" --next "写说明" --source agent --json
+-pmgr todo-add --title "未归属的想法" --json
+-pmgr add --project demo --status active --summary "钉住这个想法" \
++pmgr add --project demo --status active --summary "Review queued" \
++  --next "Collect logs" --next "Write the note" --source agent --json
++pmgr todo-add --title "Unassigned idea" --json
++pmgr add --project demo --status active --summary "Pin the idea" \
+   --next-todo <todo-uuid> --source agent --json
+-pmgr todos --project demo --status open --json
++pmgr next --project demo --json
+ pmgr todo-update --uid <todo-uuid> --status completed --json
+ pmgr todo-update --uid <todo-uuid> --status cancelled --json
+ ```
+ 
+-`todos --status open` 从待办而不是字符串下一步回答「还有哪些未完成工作」。
+-加上 `--project` 时，当前快照钉住的 UID 会排在前面。
+-完成或取消待办会立刻反映在所有解析视图上，且不会改写历史快照。
+-新快照不再列入某个 UID，只表示它不再是当前下一步，不会改变该待办的状态。
++The canonical daily checklist is `pmgr next --json` (also `pmgr status next`).
++Do not combine `nextSteps`, `nextTodos`, and `todos` by hand. Before every `add`,
++run `pmgr next --project P --json` and decide each item: keep it (do nothing;
++existing pins carry), finish it with `--done-todo <uid>`, or retire superseded
++work with `--cancel-todo <uid>`. Both close flags are repeatable and run in the
++same transaction as the snapshot. Unpinned work remains visible in the backlog.
++Use `--next` only for new actions, never status descriptions; put blockers in
++`--blocker`. No Todo is automatically cancelled by age or similarity.
++
++`--replace-next` restores replacement behavior: without next work it unpins
++everything; with next work it pins only those UIDs. It never closes Todos.
++The domain `addStatus` API still defaults to `nextMode: "replace"`; CLI `add`
++passes `"carry"` unless `--replace-next` is present. Imports stay strict.
++
++Legacy snapshots retain strings until explicitly converted. A plain carry-mode
++`add` preserves the full legacy list and `nextStepsSourceUid` while any index is
++unconverted; adding new next work then requires conversion or `--replace-next`.
++Conversion is idempotent and appends no snapshot:
+ 
+-旧快照保留字符串 `nextSteps`，并省略 `nextTodoUids`。转换仍按来源下标显式进行，且不会追加快照。
+-只要还有来源下标未转换，完成活动时的后续快照会复制完整字符串列表和 `nextStepsSourceUid`。
+-每个下标都已有待办之后，后续快照才按原下标顺序写入 `nextTodoUids`，不新建待办，也不改变状态。
+-一条快照不能同时保存原文和引用。
++```sh
++pmgr todo-convert --entry <id-or-uid> --index 0 --json
++pmgr todo-convert --project demo --json
++# Back up before an explicit, user-run conversion of every current legacy source.
++pmgr export --format json > backup.json
++pmgr todo-convert --all --json
++```
++
++Once all source indices have Todos, the next carry-mode `add` materializes refs
++in index order, filtering out closed Todos. Historical snapshots stay unchanged.
++`next` combines converted Todos and unconverted strings without duplicates.
+ 
+-`current` 和 `history` 会带上存储的 `nextTodoUids`，以及实时的 `nextTodos`（`uid`、`title`、`status`、`project`）。
+-这个视图是待办的当前状态，不是快照发生时的历史状态。
+-`at` 返回当时的快照；如果存了引用就包含引用，但不会附加实时视图。
++`current --json` adds live `openWork` for each project's checklist, while its
++stored `nextSteps`, `nextTodoUids`, and live `nextTodos` retain their previous
++meaning, including closed pins. Text `current` prints open work with `[pinned]`
++markers. `history`, `at`, and `getEntry` do not gain `openWork`; `history` text
++and `completeActivity` follow-up copying stay unchanged. `at` returns stored
++snapshots without live Todo resolution.
+ 
+ 快照只能引用未归属的待办，或已经属于该项目的待办。
+ 待办一旦出现在任意 `nextTodoUids` 中，或关联了来源动态，就不能再改项目。
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 9999968..2bd4604 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -109,8 +109,8 @@ Migration 3 backfills random UUIDs and rejects inserts lacking a UUID, so old wr
+ `todos` stores stable UUIDs, title, optional project/source UUID, optional legacy
+ step index, status, creation time, and completion time. Source links constrain
+ project ownership. A unique source/index pair makes conversion retry-safe.
+-New `addStatus` calls with `--next` text create Todos and `nextTodoUids` in the
+-same transaction and leave string `nextSteps` empty. Imports do not implicitly
++New `addStatus` calls with next-step text create or reuse exact-title open Todos
++and store `nextTodoUids` in the same transaction, leaving string `nextSteps` empty. Imports do not implicitly
+ create work. Legacy rows keep string `nextSteps` and leave `next_todo_uids_json`
+ NULL. Todos are editable current state, while activity snapshots and their
+ completion events remain append-only. Version-3 bundles include Todos without
+@@ -134,3 +134,42 @@ after export/import; copying context never creates a second conversion identity.
+ 
+ `current` and `history` add `nextTodos`, a live resolution of stored refs.
+ `at` returns the stored snapshot only, so resolved titles there are not historical.
++
++## Current open work and CLI carry behavior
++
++`openWork(db, project?)`, exported through `src/index.ts`, is the shared read
++model behind the canonical daily checklist `pmgr next --json`. Never combine
++`nextSteps`, `nextTodos`, and `todos` manually. For each project it emits open
++pins in index order, converted legacy Todos or unconverted `legacy-step` items,
++then other open project Todos ordered by `createdAt, uid`. A Todo appears once.
++Global output follows `current()` order; projects with Todos but no snapshot
++follow in slug order, then unassigned unpinned open Todos. A pinned unassigned
++Todo is grouped under the pinning project without changing its stored ownership;
++if multiple current projects pin it, the first project in current order wins.
++Reads never create work. Only CLI `current` adds `openWork`; historical reads,
++server/dashboard contracts, schema, and portable exports remain unchanged.
++
++Before `add`, agents run `pmgr next --project P --json`: keep work by doing
++nothing, finish it with `--done-todo`, retire superseded work with `--cancel-todo`,
++and use `--next` only for new actions. Status prose belongs in summary/progress;
++blockers belong in `--blocker`. No age- or similarity-based cancellation occurs.
++
++The domain `addStatus` accepts write-only `nextMode` and `closeTodos` options.
++Its default remains `replace`; imports reject these non-portable fields. CLI
++`add` now passes `carry`, so a plain write keeps open pins instead of clearing
++them. `--replace-next` explicitly replaces pins, including clearing with no
++next work, and never closes Todos. Inside one immediate transaction, identity
++replays return first, validated closures use `updateTodo`, carried pins filter
++open status, and new UIDs append with first-occurrence deduplication. Exact-title
++reuse considers only prior open Todos of the project, preferring pins, then
++`createdAt, uid`; provenance stays unchanged. Repeated new titles within the
++write still create separate Todos. Fixed-UID carry retries compare stored pins
++and titles rather than recomputing from current Todo statuses; portable imports
++retain strict equality.
++
++Partially converted legacy carry writes preserve all strings and their effective
++source UID. New next work requires `todo-convert` or `--replace-next`. CLI
++`todo-convert --entry <ref> --index <n>`, `--project P`, and `--all` use the
++existing idempotent conversion function without appending a snapshot. Once all
++indices are converted, the next carry write materializes open refs in index
++order. `completeActivity` retains its existing pin-copying semantics.
+diff --git a/skills/project-mgr/SKILL.md b/skills/project-mgr/SKILL.md
+index 6855aa3..afb02ca 100644
+--- a/skills/project-mgr/SKILL.md
++++ b/skills/project-mgr/SKILL.md
+@@ -64,10 +64,12 @@ pmgr list --query "keyword" --json
+ pmgr serve --port 3000 --no-open --json
+ 
+ # Record a completed milestone while the project remains active.
+-# --next creates Todos and stores their UIDs on the snapshot. Reuse work with --next-todo.
++# Inspect open work before every add. Existing open pins carry automatically.
++pmgr next --project my-project --json
++# Use --next for new actions; exact prior open titles reuse their Todo UID.
+ pmgr add --project my-project --status active --summary "Implemented the CLI" \
+   --progress "Tests pass" --next "Publish the package" --source agent --json
+-pmgr todos --project my-project --status open --json
++pmgr next --project my-project --json
+ 
+ # Same project, with a tag naming the sub-project this snapshot covers.
+ pmgr add --project acme --status active --summary "Shipped the web dashboard" \
+@@ -94,4 +96,37 @@ When this update resolves all commitments of earlier entries (including blockers
+ 
+ Use `complete --entry <id-or-uid> --by <id-or-uid> --source agent` for an existing follow-up. Use `revoke-completion --entry <id-or-uid> --by <id-or-uid> --reason "..." --source agent` to correct a mistaken link. Links require the same project and strictly increasing occurrence times. Query the affected history afterward to verify effective completion. Do not bulk-close old entries without evidence.
+ 
+-Export produces a version-2 bundle when there are no Todos or refs, version 3 when Todos exist without refs, and version 4 when snapshots store `nextTodoUids` (one bundle per line for JSONL). Legacy imports remain supported and do not create Todos. Open work is `todos --status open`; current `nextTodoUids` only order that project's open items. Do not combine `--next` with `--next-todo`. Repeating `--next` text on a later snapshot creates a new Todo; pass existing UIDs to keep the same work. Cancelling or completing a Todo is `todo-update`, not deleting text from a snapshot. `at` has no completion annotations and does not resolve live Todo status. Project current state still comes from the latest snapshot.
++## Daily open-work checklist
++
++Use `pmgr next --json` as the canonical daily checklist. Do not combine
++`nextSteps`, `nextTodos`, and `todos` by hand. Before every `add`, run
++`pmgr next --project P --json`. Decide each item from evidence: keep it (do
++nothing; open pins carry), finish it (`--done-todo <uid>`), or retire superseded
++work (`--cancel-todo <uid>`). Close flags are repeatable and atomic with `add`.
++Unpinned Todos remain visible as backlog; pin them explicitly with `--next-todo`.
++Use `--next` only for new actions, not status descriptions. Put blockers in
++`--blocker`. Never cancel older or similar work automatically.
++
++CLI behavior change: plain `add` keeps open pins instead of clearing them;
++`--next` appends. Exact trimmed, case-sensitive titles reuse an existing open
++Todo of the same project, preferring a pin, then the oldest by creation time and
++UID. Its provenance stays unchanged. Duplicate new titles in one write still
++create separate Todos. Do not combine `--next` and `--next-todo`.
++`--replace-next` only replaces pins (or clears them with no next work); it does
++not close Todos. The domain API defaults to replace; imports remain strict.
++
++Legacy strings appear as `legacy-step` items until explicitly converted with
++`pmgr todo-convert --project P --json`, or `--entry <id-or-uid> --index <n>`.
++`--all` converts every current legacy source only when the user requests it;
++back up first with `pmgr export --format json > backup.json`. Conversion is
++idempotent and appends no snapshot. A plain `add` preserves partially converted
++legacy strings; new next work requires conversion or `--replace-next`.
++Once fully converted, the next carry-mode `add` pins the open converted Todos
++in index order.
++
++`current --json` adds live `openWork`, and text `current` marks pinned work.
++Raw `nextSteps`, `nextTodoUids`, and `nextTodos` retain their existing meaning.
++`history`, `at`, and `getEntry` do not gain `openWork`; `at` does not resolve
++live Todo status. Project current state still comes from the latest snapshot.
++Export emits version 2 without Todos/refs, version 3 with Todos but no refs,
++and version 4 with refs. Import/export never carries, reuses, or closes work.
+diff --git a/src/cli.ts b/src/cli.ts
+index 87cf25a..d21c341 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -5,6 +5,9 @@ import { pathToFileURL } from "node:url";
+ import {
+   addStatus,
+   createTodo,
++  convertNextStep,
++  getEntry,
++  openWork,
+   listTodos,
+   updateTodo,
+   at,
+@@ -33,6 +36,8 @@ const booleanFlags = new Set([
+   "no-open",
+   "help",
+   "version",
++  "replace-next",
++  "all",
+ ]);
+ const repeats = new Set([
+   "next",
+@@ -41,6 +46,8 @@ const repeats = new Set([
+   "decision",
+   "tag",
+   "completes",
++  "done-todo",
++  "cancel-todo",
+ ]);
+ 
+ function parse(argv: string[]): { command: string[]; flags: Flags } {
+@@ -90,6 +97,9 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
+       "blocker",
+       "next",
+       "next-todo",
++      "replace-next",
++      "done-todo",
++      "cancel-todo",
+       "decision",
+       "tag",
+       "at",
+@@ -101,6 +111,8 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
+   ],
+   ["todo-add", new Set(["title", "project", "entry", "json"])],
+   ["todos", new Set(["project", "status", "json"])],
++  ["next", new Set(["project", "json"])],
++  ["todo-convert", new Set(["entry", "index", "project", "all", "json"])],
+   ["todo-update", new Set(["uid", "status", "project", "json"])],
+   ["complete", new Set(["entry", "by", "reason", "source", "json"])],
+   ["revoke-completion", new Set(["entry", "by", "reason", "source", "json"])],
+@@ -130,6 +142,11 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
+ ]);
+ 
+ const commandHelp: Record<string, [string, string]> = {
++  next: ["List all open work, pinned first", "[--project <name>] [--json]"],
++  "todo-convert": [
++    "Convert legacy next steps without appending a snapshot",
++    "--entry <id-or-uid> --index <n> | --project <name> | --all [--json]",
++  ],
+   "todo-add": [
+     "Create an independent or linked Todo",
+     "--title <text> [--project <name>] [--entry <uid>] [--json]",
+@@ -144,7 +161,7 @@ const commandHelp: Record<string, [string, string]> = {
+   ],
+   add: [
+     "Append a status snapshot",
+-    "--project <name> --summary <text> [--next <text> | --next-todo <uid>] [options]",
++    "--project <name> --summary <text> [--next <text> | --next-todo <uid>] [--replace-next] [--done-todo <uid>] [--cancel-todo <uid>] [options]",
+   ],
+   complete: [
+     "Link a completed activity to its follow-up",
+@@ -225,7 +242,7 @@ function validateInvocation(command: string[], flags: Flags): string {
+     typeof action === "string" ? allowedFlags.get(action) : undefined;
+   if (typeof action !== "string" || !allowed)
+     throw new ValidationError(
+-      "usage: pmgr <add|complete|revoke-completion|import|current|projects|list|set-project|history|at|export|serve> (or: pmgr status <action>)",
++      "usage: pmgr <add|next|todo-add|todos|todo-update|todo-convert|complete|revoke-completion|import|current|projects|list|set-project|history|at|export|serve> (or: pmgr status <action>)",
+     );
+   const positional = command.slice(statusCommand ? 2 : 1);
+   if (action === "import") {
+@@ -277,7 +294,7 @@ function output(
+     const rows = value
+       .map(
+         (entry) =>
+-          `${entry.project}\t${entry.effectiveStatus ?? entry.status}\t${entry.occurredAt}\t${entry.summary}${entry.completedBy ? ` (completed by #${entry.completedBy.id}; original: ${entry.status})` : ""}`,
++          `${entry.project}\t${entry.effectiveStatus ?? entry.status}\t${entry.occurredAt}\t${entry.summary}${entry.completedBy ? ` (completed by #${entry.completedBy.id}; original: ${entry.status})` : ""}${entry.openWork ? entry.openWork.map((item: { title: string; pinned: boolean }) => `\n  - ${item.title}${item.pinned ? " [pinned]" : ""}`).join("") : ""}`,
+       )
+       .join("\n");
+     write(`${rows || "No entries found."}\n`);
+@@ -366,6 +383,65 @@ export function run(
+   const json = flags.json === true;
+   try {
+     switch (action) {
++      case "next": {
++        const items = openWork(db, stringFlag(flags, "project"));
++        if (json) output(items, true, write);
++        else
++          write(
++            items.length
++              ? items
++                  .map(
++                    (item) =>
++                      `${item.project ?? "-"}\t${item.kind === "todo" ? item.uid : `${item.entryUid}#${item.stepIndex}`}\t${item.pinned ? "pinned" : "-"}\t${item.title}`,
++                  )
++                  .join("\n") + "\n"
++              : "No open work.\n",
++          );
++        break;
++      }
++      case "todo-convert": {
++        const ref = stringFlag(flags, "entry");
++        const project = stringFlag(flags, "project");
++        if (
++          Number(ref !== undefined) +
++            Number(project !== undefined) +
++            Number(flags.all === true) !==
++          1
++        )
++          throw new ValidationError(
++            "use exactly one of --entry, --project, or --all",
++          );
++        if ((ref === undefined) !== (flags.index === undefined))
++          throw new ValidationError(
++            "--entry requires --index; --index requires --entry",
++          );
++        const todos = db
++          .transaction(() => {
++            if (ref !== undefined)
++              return [convertNextStep(db, ref, numberFlag(flags, "index", 0))];
++            return current(db, project).flatMap((entry) => {
++              if (entry.nextTodoUids !== undefined) return [];
++              const source = entry.nextStepsSourceUid
++                ? getEntry(db, entry.nextStepsSourceUid)!
++                : entry;
++              return source.nextSteps.map((_, index) =>
++                convertNextStep(db, source.uid, index),
++              );
++            });
++          })
++          .immediate();
++        if (json) output(todos, true, write);
++        else
++          write(
++            todos
++              .map(
++                (todo) =>
++                  `${todo.uid}\t${todo.status}\t${todo.project ?? "-"}\t${todo.title}`,
++              )
++              .join("\n") + "\n",
++          );
++        break;
++      }
+       case "todo-add":
+         output(
+           createTodo(db, {
+@@ -438,6 +514,17 @@ export function run(
+                 progress: stringFlag(flags, "progress"),
+                 blockers: listFlag(flags, "blocker"),
+                 nextSteps: next,
++                nextMode: flags["replace-next"] === true ? "replace" : "carry",
++                closeTodos: [
++                  ...listFlag(flags, "done-todo").map((uid) => ({
++                    uid,
++                    status: "completed",
++                  })),
++                  ...listFlag(flags, "cancel-todo").map((uid) => ({
++                    uid,
++                    status: "cancelled",
++                  })),
++                ],
+                 ...(nextTodo.length > 0 ? { nextTodoUids: nextTodo } : {}),
+                 decisions: listFlag(flags, "decision"),
+                 tags: listFlag(flags, "tag"),
+@@ -484,7 +571,14 @@ export function run(
+         );
+         break;
+       case "current":
+-        output(current(db, stringFlag(flags, "project")), json, write);
++        output(
++          current(db, stringFlag(flags, "project")).map((entry) => ({
++            ...entry,
++            openWork: openWork(db, entry.project),
++          })),
++          json,
++          write,
++        );
+         break;
+       case "projects":
+       case "list":
+diff --git a/src/db.ts b/src/db.ts
+index 260857a..a5f8d93 100644
+--- a/src/db.ts
++++ b/src/db.ts
+@@ -22,6 +22,30 @@ import {
+ 
+ export type Ledger = Database.Database;
+ export type InsertResult = { entry: StatusEntry; inserted: boolean };
++export type AddStatusInput = StatusEntryInput & {
++  nextMode?: "carry" | "replace";
++  closeTodos?: { uid: string; status: "completed" | "cancelled" }[];
++};
++export type OpenWorkItem =
++  | {
++      kind: "todo";
++      uid: string;
++      title: string;
++      project: string | null;
++      pinned: boolean;
++      pinIndex: number | null;
++      createdAt: string;
++      entryUid: string | null;
++    }
++  | {
++      kind: "legacy-step";
++      project: string;
++      entryUid: string;
++      stepIndex: number;
++      title: string;
++      pinned: true;
++      pinIndex: number;
++    };
+ export type HistoryOptions = {
+   since?: string;
+   until?: string;
+@@ -321,6 +345,7 @@ function existingIdentity(
+   input: StatusEntryInput & { occurredAt: string; source: Source },
+   recordedAt?: string,
+   textRetry = false,
++  carry = false,
+ ): InsertResult | undefined {
+   if (input.uid) {
+     const existing = one(db, `${select} WHERE e.uid = ?`, input.uid);
+@@ -333,7 +358,7 @@ function existingIdentity(
+       // Text/ref equivalence is only for addStatus sugar retries, not imports.
+       const sameWrite =
+         isDeepStrictEqual(toPortableStatusEntry(existing), candidate) ||
+-        (textRetry && textRefEquivalent(db, existing, input));
++        (textRetry && textRefEquivalent(db, existing, input, carry));
+       if (
+         !sameWrite ||
+         (recordedAt !== undefined && recordedAt !== existing.recordedAt)
+@@ -365,13 +390,31 @@ function textRefEquivalent(
+   db: Ledger,
+   existing: StatusEntry,
+   input: StatusEntryInput & { occurredAt: string; source: Source },
++  carry = false,
+ ): boolean {
+-  // A text --next retry is the same write as the refs snapshot it produced.
+-  if (existing.nextTodoUids === undefined || input.nextTodoUids !== undefined)
+-    return false;
++  // Retry against stored pins, never today's open status or latest snapshot.
++  if (existing.nextTodoUids === undefined) {
++    if (!carry || input.nextTodoUids !== undefined || input.nextSteps?.length)
++      return false;
++    return isDeepStrictEqual(
++      toPortableStatusEntry(existing),
++      toPortableStatusEntry({
++        ...input,
++        nextSteps: existing.nextSteps,
++        nextStepsSourceUid: existing.nextStepsSourceUid,
++      } as StatusEntry),
++    );
++  }
++  if (!carry && input.nextTodoUids !== undefined) return false;
+   assert.ok(input.nextSteps);
+   const titles = input.nextSteps;
+-  if (titles.length !== existing.nextTodoUids.length) return false;
++  const size = input.nextTodoUids?.length ?? titles.length;
++  if (
++    carry
++      ? size > existing.nextTodoUids.length
++      : size !== existing.nextTodoUids.length
++  )
++    return false;
+   const candidate = toPortableStatusEntry({
+     ...input,
+     nextSteps: [],
+@@ -381,7 +424,12 @@ function textRefEquivalent(
+   } as StatusEntry);
+   if (!isDeepStrictEqual(toPortableStatusEntry(existing), candidate))
+     return false;
+-  return existing.nextTodoUids.every((uid, index) => {
++  const suffix = existing.nextTodoUids.slice(
++    existing.nextTodoUids.length - size,
++  );
++  return suffix.every((uid, index) => {
++    if (input.nextTodoUids !== undefined)
++      return uid === input.nextTodoUids[index];
+     const todo = todoByUid(db, uid);
+     return todo !== undefined && todo.title === titles[index];
+   });
+@@ -393,25 +441,111 @@ export function addStatus(
+   defaultSource: Source = "human",
+   completes: string[] = [],
+ ): InsertResult {
+-  const input = validateStatusEntry(value, defaultSource);
++  if (!value || typeof value !== "object" || Array.isArray(value))
++    throw new ValidationError("entry must be an object");
++  const {
++    nextMode = "replace",
++    closeTodos = [],
++    ...fields
++  } = value as Record<string, unknown>;
++  if (nextMode !== "carry" && nextMode !== "replace")
++    throw new ValidationError("invalid nextMode");
++  if (!Array.isArray(closeTodos))
++    throw new ValidationError("closeTodos must be an array");
++  const input = validateStatusEntry(fields, defaultSource);
+   if (input.nextStepsSourceUid)
+     throw new ValidationError("new snapshots cannot set nextStepsSourceUid");
+   return db
+     .transaction(() => {
+-      const replay = existingIdentity(db, input, undefined, true);
++      const replay = existingIdentity(
++        db,
++        input,
++        undefined,
++        true,
++        nextMode === "carry",
++      );
+       if (replay) {
+         linkCompletions(db, completes, replay.entry.uid, input.source);
+         return replay;
+       }
+-      if (input.nextTodoUids !== undefined) {
+-        assertSnapshotRefs(db, input.project, input.nextTodoUids);
+-        const result = addValidatedStatus(db, { ...input, nextSteps: [] });
++      const latest = current(db, input.project)[0];
++      const preserved = latest
++        ? preservedNextWork(db, latest)
++        : { nextSteps: [], nextTodoUids: [] };
++      const pins =
++        preserved.nextTodoUids ??
++        (latest
++          ? legacySource(db, latest).nextSteps.flatMap((_, index) => {
++              const todo = stepTodo(db, legacySource(db, latest).uid, index);
++              return todo ? [todo.uid] : [];
++            })
++          : []);
++      const closing = new Map<string, "completed" | "cancelled">();
++      for (const value of closeTodos) {
++        const close = record(value, ["uid", "status"]);
++        const uid = validateUid(close.uid);
++        if (close.status !== "completed" && close.status !== "cancelled")
++          throw new ValidationError("invalid closeTodos status");
++        if (
++          (closing.has(uid) && closing.get(uid) !== close.status) ||
++          input.nextTodoUids?.includes(uid)
++        )
++          throw new ValidationError(
++            "cannot close a Todo in both statuses or also pin it",
++          );
++        const todo = todoByUid(db, uid);
++        if (!todo || (todo.project !== input.project && !pins.includes(uid)))
++          throw new ValidationError(
++            `todo ${uid} does not belong to project ${input.project} or its current pins`,
++          );
++        closing.set(uid, close.status);
++      }
++      for (const [uid, status] of closing) updateTodo(db, uid, { status });
++      if (nextMode === "carry" && preserved.nextTodoUids === undefined) {
++        if (input.nextSteps.length || input.nextTodoUids?.length)
++          throw new ValidationError(
++            `project ${input.project} has unconverted legacy next steps; run pmgr todo-convert --project ${input.project} or pass --replace-next`,
++          );
++        const result = addValidatedStatus(db, { ...input, ...preserved });
+         linkCompletions(db, completes, result.entry.uid, input.source);
+         return result;
+       }
+-      // Text --next sugar: one new Todo per title, stored only as refs.
++      if (input.nextTodoUids !== undefined)
++        assertSnapshotRefs(db, input.project, input.nextTodoUids);
++      // Freeze candidates before creating this write's Todos: repeated new titles stay separate.
++      const candidates = listTodos(db, input.project, { status: "open" });
++      candidates.sort(
++        (a, b) =>
++          Number(pins.includes(b.uid)) - Number(pins.includes(a.uid)) ||
++          a.createdAt.localeCompare(b.createdAt) ||
++          a.uid.localeCompare(b.uid),
++      );
+       const uid = input.uid ?? randomUUID();
+-      const nextTodoUids = input.nextSteps.map(() => randomUUID());
++      const newTodos: { uid: string; title: string }[] = [];
++      const resolved =
++        input.nextTodoUids ??
++        input.nextSteps.map((title, index) => {
++          const match =
++            input.nextSteps.indexOf(title) === index
++              ? candidates.find((todo) => todo.title === title)
++              : undefined;
++          if (match) return match.uid;
++          const uid = randomUUID();
++          newTodos.push({ uid, title });
++          return uid;
++        });
++      const nextTodoUids = [
++        ...new Set([
++          ...(nextMode === "carry"
++            ? pins.filter((uid) => todoByUid(db, uid)?.status === "open")
++            : []),
++          ...resolved,
++        ]),
++      ];
++      if (nextTodoUids.length > 100)
++        throw new ValidationError(
++          "nextTodoUids must be an array of at most 100 uuids",
++        );
+       const recordedAt = new Date().toISOString();
+       const result = addValidatedStatus(
+         db,
+@@ -419,13 +553,14 @@ export function addStatus(
+         recordedAt,
+       );
+       assert.equal(result.inserted, true);
+-      input.nextSteps.forEach((title, index) => {
++      newTodos.forEach(({ uid, title }) => {
+         insertTodo(db, {
+-          uid: nextTodoUids[index],
++          uid,
+           title,
+           project: result.entry.project,
+           entryUid: result.entry.uid,
+-          stepIndex: index,
++          // Provenance indexes the final snapshot, including carried/reused pins.
++          stepIndex: nextTodoUids.indexOf(uid),
+           status: "open",
+           createdAt: recordedAt,
+           completedAt: null,
+@@ -522,6 +657,71 @@ export function current(db: Ledger, project?: string): StatusEntry[] {
+   return rows.map((row) => annotateEntry(db, entryFromRow(row)));
+ }
+ 
++export function openWork(db: Ledger, project?: string): OpenWorkItem[] {
++  const latest = current(db, project);
++  const todos = listTodos(db, project);
++  const projects =
++    project !== undefined
++      ? [project]
++      : [
++          ...latest.map((entry) => entry.project),
++          ...[
++            ...new Set(
++              todos.flatMap((todo) =>
++                todo.project === null ? [] : [todo.project],
++              ),
++            ),
++          ]
++            .filter((name) => !latest.some((entry) => entry.project === name))
++            .sort(),
++        ];
++  const items: OpenWorkItem[] = [];
++  const seen = new Set<string>();
++  const add = (todo: Todo, owner: string | null, pinIndex: number | null) => {
++    if (todo.status !== "open" || seen.has(todo.uid)) return;
++    seen.add(todo.uid);
++    items.push({
++      kind: "todo",
++      uid: todo.uid,
++      title: todo.title,
++      project: owner,
++      pinned: pinIndex !== null,
++      pinIndex,
++      createdAt: todo.createdAt,
++      entryUid: todo.entryUid,
++    });
++  };
++  for (const name of projects) {
++    const entry = latest.find((entry) => entry.project === name);
++    if (entry?.nextTodoUids !== undefined) {
++      entry.nextTodoUids.forEach((uid, index) => {
++        const todo = todoByUid(db, uid);
++        if (todo) add(todo, name, index);
++      });
++    } else if (entry) {
++      const source = legacySource(db, entry);
++      source.nextSteps.forEach((title, index) => {
++        const todo = stepTodo(db, source.uid, index);
++        if (todo) add(todo, name, index);
++        else
++          items.push({
++            kind: "legacy-step",
++            project: name,
++            entryUid: source.uid,
++            stepIndex: index,
++            title,
++            pinned: true,
++            pinIndex: index,
++          });
++      });
++    }
++    for (const todo of todos) if (todo.project === name) add(todo, name, null);
++  }
++  if (project === undefined)
++    for (const todo of todos) if (todo.project === null) add(todo, null, null);
++  return items;
++}
++
+ export function history(
+   db: Ledger,
+   project?: string,
+diff --git a/test/open-work.test.ts b/test/open-work.test.ts
+new file mode 100644
+index 0000000..679f5b7
+--- /dev/null
++++ b/test/open-work.test.ts
+@@ -0,0 +1,838 @@
++import assert from "node:assert/strict";
++import { randomUUID } from "node:crypto";
++import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import test from "node:test";
++import {
++  addStatus,
++  at,
++  convertNextStep,
++  countEntries,
++  createTodo,
++  current,
++  exportLedger,
++  getEntry,
++  history,
++  importLedger,
++  listTodos,
++  openLedger,
++  openWork,
++  run,
++  setProjectMetadata,
++  updateTodo,
++  type Ledger,
++  type OpenWorkItem,
++  type StatusEntry,
++  type Todo,
++} from "../src/index.js";
++
++function cliTest(
++  name: string,
++  body: (cli: (args: string[]) => string, db: Ledger, dir: string) => void,
++) {
++  test(name, () => {
++    const dir = mkdtempSync(join(tmpdir(), "pmgr-open-work-"));
++    const previous = process.env.PMGR_DB_PATH;
++    process.env.PMGR_DB_PATH = join(dir, "test.sqlite");
++    const db = openLedger();
++    const cli = (args: string[]) => {
++      let output = "";
++      run(args, (text) => {
++        output += text;
++      });
++      return output;
++    };
++    try {
++      body(cli, db, dir);
++    } finally {
++      db.close();
++      if (previous === undefined) delete process.env.PMGR_DB_PATH;
++      else process.env.PMGR_DB_PATH = previous;
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
++}
++const addArgs = (summary: string, ...args: string[]) => [
++  "add",
++  "--project",
++  "demo",
++  "--status",
++  "active",
++  "--summary",
++  summary,
++  "--json",
++  ...args,
++];
++const nextArgs = ["next", "--project", "demo", "--json"];
++const legacyInput = (project = "demo") => ({
++  project,
++  status: "active",
++  summary: "Legacy",
++  nextSteps: ["A", "B"],
++  occurredAt: "2026-01-01T00:00:00.000Z",
++});
++
++cliTest(
++  "AC1-5: CLI carries pins, exposes live open work, and pins independent Todos",
++  (cli, db) => {
++    const a = JSON.parse(cli(addArgs("First", "--next", "A"))) as StatusEntry;
++    const b = JSON.parse(cli(addArgs("Second", "--next", "B"))) as StatusEntry;
++    assert.deepEqual(b.nextTodoUids?.slice(0, 1), a.nextTodoUids);
++    assert.equal(b.nextTodoUids?.length, 2);
++    assert.deepEqual(
++      (JSON.parse(cli(nextArgs)) as OpenWorkItem[]).map((item) => [
++        item.title,
++        item.pinned,
++      ]),
++      [
++        ["A", true],
++        ["B", true],
++      ],
++    );
++    const plain = JSON.parse(cli(addArgs("Plain"))) as StatusEntry;
++    assert.deepEqual(plain.nextTodoUids, b.nextTodoUids);
++    cli(["todo-update", "--uid", a.nextTodoUids![0], "--status", "cancelled"]);
++    const view = JSON.parse(
++      cli(["current", "--project", "demo", "--json"]),
++    ) as (StatusEntry & { openWork: OpenWorkItem[] })[];
++    assert.equal(view[0].nextTodos?.[0].status, "cancelled");
++    assert.deepEqual(
++      view[0].openWork.map((item) => item.title),
++      ["B"],
++    );
++    const filtered = JSON.parse(cli(addArgs("Drop cancelled"))) as StatusEntry;
++    assert.deepEqual(filtered.nextTodoUids, b.nextTodoUids?.slice(1));
++    const before = countEntries(db);
++    const c = JSON.parse(
++      cli(["todo-add", "--project", "demo", "--title", "C", "--json"]),
++    ) as Todo;
++    assert.equal(countEntries(db), before);
++    assert.deepEqual(
++      (JSON.parse(cli(nextArgs)) as OpenWorkItem[]).map((item) => [
++        item.title,
++        item.pinned,
++      ]),
++      [
++        ["B", true],
++        ["C", false],
++      ],
++    );
++    const pinned = JSON.parse(
++      cli(addArgs("Pin C", "--next-todo", c.uid)),
++    ) as StatusEntry;
++    assert.deepEqual(pinned.nextTodoUids, [...filtered.nextTodoUids!, c.uid]);
++    assert.match(
++      cli(["current", "--project", "demo"]),
++      /\n  - B \[pinned\]\n  - C \[pinned\]/,
++    );
++    assert.doesNotMatch(cli(["history", "--project", "demo"]), /\n  -/);
++    for (const entry of history(db)) assert.equal("openWork" in entry, false);
++    assert.equal("openWork" in getEntry(db, pinned.uid)!, false);
++    assert.equal("openWork" in at(db, "demo", pinned.occurredAt)!, false);
++  },
++);
++
++cliTest(
++  "AC3: cancelling the only pin leaves an empty checklist and raw current pins",
++  (cli) => {
++    const a = JSON.parse(cli(addArgs("First", "--next", "A"))) as StatusEntry;
++    cli(["todo-update", "--uid", a.nextTodoUids![0], "--status", "cancelled"]);
++    assert.deepEqual(JSON.parse(cli(nextArgs)), []);
++    assert.equal(cli(["next", "--project", "demo"]), "No open work.\n");
++    const rows = JSON.parse(cli(["current", "--json"])) as (StatusEntry & {
++      openWork: OpenWorkItem[];
++    })[];
++    assert.deepEqual(rows[0].openWork, []);
++    assert.equal(rows[0].nextTodos?.[0].status, "cancelled");
++  },
++);
++
++cliTest(
++  "AC6,8: close and replace are atomic; unpinning never changes status",
++  (cli, db) => {
++    const a = JSON.parse(cli(addArgs("First", "--next", "A"))) as StatusEntry;
++    const b = JSON.parse(
++      cli(
++        addArgs("Finish A", "--next", "B", "--done-todo", a.nextTodoUids![0]),
++      ),
++    ) as StatusEntry;
++    assert.equal(b.nextTodoUids?.length, 1);
++    const done = listTodos(db).find((todo) => todo.title === "A")!;
++    assert.equal(done.status, "completed");
++    assert.ok(done.completedAt);
++    const before = exportLedger(db);
++    assert.throws(
++      () => cli(addArgs("Invalid", "--next", "C", "--done-todo", randomUUID())),
++      /does not belong/,
++    );
++    assert.deepEqual(exportLedger(db), before);
++    assert.throws(
++      () =>
++        cli(
++          addArgs(
++            "Rollback closure",
++            "--done-todo",
++            b.nextTodoUids![0],
++            "--next-todo",
++            randomUUID(),
++          ),
++        ),
++      /dangling/,
++    );
++    assert.deepEqual(exportLedger(db), before);
++    for (const flags of [
++      ["--done-todo", done.uid, "--cancel-todo", done.uid],
++      ["--done-todo", done.uid, "--next-todo", done.uid],
++    ])
++      assert.throws(() => cli(addArgs("Conflict", ...flags)), /cannot close/);
++    const cleared = JSON.parse(
++      cli(addArgs("Clear", "--replace-next")),
++    ) as StatusEntry;
++    assert.deepEqual(cleared.nextTodoUids, []);
++    assert.equal(
++      listTodos(db).find((todo) => todo.title === "B")!.status,
++      "open",
++    );
++    const d = JSON.parse(
++      cli(
++        addArgs(
++          "Replace",
++          "--replace-next",
++          "--next",
++          "D",
++          "--cancel-todo",
++          b.nextTodoUids![0],
++        ),
++      ),
++    ) as StatusEntry;
++    assert.equal(d.nextTodoUids?.length, 1);
++    assert.deepEqual(
++      openWork(db, "demo").map((item) => item.title),
++      ["D"],
++    );
++    assert.equal(
++      listTodos(db).find((todo) => todo.title === "B")!.completedAt,
++      null,
++    );
++    cli(addArgs("No-op close", "--done-todo", done.uid));
++    assert.equal(
++      listTodos(db).find((todo) => todo.uid === done.uid)!.completedAt,
++      done.completedAt,
++    );
++  },
++);
++
++cliTest(
++  "AC7: exact titles reuse prior open Todos; duplicate new titles stay separate",
++  (cli, db) => {
++    cli(addArgs("Base"));
++    const old = createTodo(db, { title: "A", project: "demo" });
++    const pinned = JSON.parse(
++      cli(addArgs("Reuse", "--next", " A ")),
++    ) as StatusEntry;
++    assert.deepEqual(pinned.nextTodoUids, [old.uid]);
++    assert.equal(listTodos(db).length, 1);
++    assert.equal(listTodos(db)[0].entryUid, null);
++    const repeated = JSON.parse(
++      cli(addArgs("Two new", "--next", "B", "--next", "B")),
++    ) as StatusEntry;
++    assert.equal(repeated.nextTodoUids?.length, 3);
++    assert.equal(listTodos(db).length, 3);
++    const replace = JSON.parse(
++      cli(addArgs("Reuse replace", "--replace-next", "--next", "A")),
++    ) as StatusEntry;
++    assert.deepEqual(replace.nextTodoUids, [old.uid]);
++    cli(addArgs("Case sensitive", "--next", "a"));
++    assert.equal(listTodos(db).length, 4);
++  },
++);
++
++cliTest(
++  "AC9-10: legacy carry preserves source; conversion is idempotent and materializes open refs",
++  (cli, db, dir) => {
++    const origin = importLedger(db, [legacyInput()])[0].entry;
++    const carried = JSON.parse(cli(addArgs("Carry legacy"))) as StatusEntry;
++    assert.deepEqual(carried.nextSteps, ["A", "B"]);
++    assert.equal(carried.nextStepsSourceUid, origin.uid);
++    assert.equal(carried.nextTodoUids, undefined);
++    const before = exportLedger(db);
++    assert.throws(
++      () => cli(addArgs("Mixed", "--next", "X")),
++      /project demo has unconverted legacy next steps; run pmgr todo-convert --project demo or pass --replace-next/,
++    );
++    assert.deepEqual(exportLedger(db), before);
++    const one = JSON.parse(
++      cli([
++        "todo-convert",
++        "--entry",
++        String(carried.id),
++        "--index",
++        "0",
++        "--json",
++      ]),
++    ) as Todo[];
++    const mixed = JSON.parse(cli(nextArgs)) as OpenWorkItem[];
++    assert.deepEqual(
++      mixed.map((item) => [item.kind, item.title, item.pinIndex]),
++      [
++        ["todo", "A", 0],
++        ["legacy-step", "B", 1],
++      ],
++    );
++    assert.equal(mixed[1].entryUid, origin.uid);
++    assert.match(
++      cli(["next", "--project", "demo"]),
++      new RegExp(`${origin.uid}#1\\tpinned\\tB`),
++    );
++    const n = countEntries(db);
++    const converted = JSON.parse(
++      cli(["todo-convert", "--project", "demo", "--json"]),
++    ) as Todo[];
++    assert.equal(converted[0].uid, one[0].uid);
++    assert.deepEqual(
++      JSON.parse(cli(["todo-convert", "--project", "demo", "--json"])),
++      converted,
++    );
++    assert.equal(countEntries(db), n);
++    cli(["todo-update", "--uid", converted[0].uid, "--status", "completed"]);
++    const materialized = JSON.parse(cli(addArgs("Refs"))) as StatusEntry;
++    assert.deepEqual(materialized.nextTodoUids, [converted[1].uid]);
++    assert.equal(materialized.nextStepsSourceUid, undefined);
++    assert.deepEqual(materialized.nextSteps, []);
++    assert.deepEqual(getEntry(db, origin.uid)?.nextSteps, ["A", "B"]);
++    importLedger(db, [legacyInput("other")]);
++    const all = JSON.parse(cli(["todo-convert", "--all", "--json"])) as Todo[];
++    assert.deepEqual(
++      all.map((todo) => todo.title),
++      ["A", "B"],
++    );
++    assert.deepEqual(JSON.parse(cli(["todo-convert", "--all", "--json"])), all);
++    // Portable round trip retains raw formats and never uses CLI carry/reuse behavior.
++    const file = join(dir, "bundle.json");
++    writeFileSync(file, JSON.stringify(exportLedger(db)));
++    const copy = openLedger(":memory:");
++    try {
++      importLedger(copy, [exportLedger(db)]);
++      assert.deepEqual(exportLedger(copy), exportLedger(db));
++    } finally {
++      copy.close();
++    }
++  },
++);
++
++cliTest(
++  "legacy replace explicitly bypasses conversion and conversion validates selectors",
++  (cli, db) => {
++    importLedger(db, [legacyInput()]);
++    const replaced = JSON.parse(
++      cli(addArgs("Replace legacy", "--replace-next", "--next", "X")),
++    ) as StatusEntry;
++    assert.equal(replaced.nextTodoUids?.length, 1);
++    assert.deepEqual(
++      JSON.parse(cli(["todo-convert", "--project", "unknown", "--json"])),
++      [],
++    );
++    for (const args of [
++      [],
++      ["--all", "--project", "demo"],
++      ["--entry", replaced.uid],
++      ["--index", "0"],
++      ["--all", "--index", "0"],
++      ["--entry", replaced.uid, "--index", "-1"],
++      ["--entry", replaced.uid, "--index", "1.5"],
++    ]) {
++      assert.throws(() => cli(["todo-convert", ...args]));
++    }
++  },
++);
++
++test("AC11: global open work groups projects, de-duplicates shared pins, and ends with unassigned", () => {
++  const db = openLedger(":memory:");
++  try {
++    const loose = createTodo(db, { title: "Loose" });
++    const shared = createTodo(db, { title: "Shared" });
++    const older = addStatus(db, {
++      project: "older",
++      summary: "Older",
++      occurredAt: "2026-01-01T00:00:00Z",
++      nextTodoUids: [shared.uid],
++    }).entry;
++    const newer = addStatus(db, {
++      project: "newer",
++      summary: "Newer",
++      occurredAt: "2026-02-01T00:00:00Z",
++      nextTodoUids: [shared.uid],
++    }).entry;
++    createTodo(db, { title: "Backlog", project: "newer" });
++    setProjectMetadata(db, { project: "no-snapshot" });
++    createTodo(db, { title: "Plan", project: "no-snapshot" });
++    assert.deepEqual(
++      current(db).map((entry) => entry.uid),
++      [newer.uid, older.uid],
++    );
++    const items = openWork(db);
++    assert.deepEqual(
++      items.map((item) => [item.project, item.title, item.pinned]),
++      [
++        ["newer", "Shared", true],
++        ["newer", "Backlog", false],
++        ["no-snapshot", "Plan", false],
++        [null, "Loose", false],
++      ],
++    );
++    assert.equal(
++      items.filter((item) => item.kind === "todo" && item.uid === shared.uid)
++        .length,
++      1,
++    );
++    assert.equal(
++      items.at(-1)?.kind === "todo" && items.at(-1)?.title,
++      loose.title,
++    );
++    assert.equal(openWork(db, "older")[0].project, "older");
++    assert.deepEqual(openWork(db, "unknown"), []);
++  } finally {
++    db.close();
++  }
++});
++
++test("R4.4 prefers pinned exact matches, then oldest createdAt/uid, and preserves provenance", () => {
++  const db = openLedger(":memory:");
++  try {
++    setProjectMetadata(db, { project: "demo" });
++    const old = createTodo(db, { title: "A", project: "demo" });
++    const pinned = createTodo(db, { title: "A", project: "demo" });
++    db.prepare("UPDATE todos SET created_at = ? WHERE uid = ?").run(
++      "2026-01-01T00:00:00.000Z",
++      old.uid,
++    );
++    addStatus(db, {
++      project: "demo",
++      summary: "Pin",
++      nextTodoUids: [pinned.uid],
++    });
++    assert.deepEqual(
++      addStatus(db, { project: "demo", summary: "Reuse", nextSteps: ["A"] })
++        .entry.nextTodoUids,
++      [pinned.uid],
++    );
++    addStatus(db, { project: "demo", summary: "Clear" });
++    assert.deepEqual(
++      addStatus(db, { project: "demo", summary: "Oldest", nextSteps: ["A"] })
++        .entry.nextTodoUids,
++      [old.uid],
++    );
++    assert.equal(
++      listTodos(db).find((todo) => todo.uid === old.uid)?.entryUid,
++      null,
++    );
++  } finally {
++    db.close();
++  }
++});
++
++test("AC12-13: domain defaults replace; carry retries use stored suffix despite status changes", () => {
++  const db = openLedger(":memory:");
++  try {
++    const a = addStatus(db, {
++      project: "demo",
++      summary: "First",
++      nextSteps: ["A"],
++      occurredAt: "2026-01-01T00:00:00Z",
++    }).entry;
++    const input = {
++      uid: randomUUID(),
++      project: "demo",
++      summary: "Carry",
++      nextSteps: ["B"],
++      nextMode: "carry",
++      occurredAt: "2026-02-01T00:00:00Z",
++    };
++    const first = addStatus(db, input);
++    assert.equal(first.entry.nextTodoUids?.length, 2);
++    updateTodo(db, first.entry.nextTodoUids![1], { status: "cancelled" });
++    addStatus(db, {
++      project: "demo",
++      summary: "Later",
++      nextSteps: ["C"],
++      occurredAt: "2026-03-01T00:00:00Z",
++    });
++    const before = exportLedger(db);
++    assert.equal(addStatus(db, input).inserted, false);
++    assert.deepEqual(exportLedger(db), before);
++    for (const change of [
++      { summary: "Changed" },
++      { nextSteps: ["Changed"] },
++      { nextTodoUids: [a.nextTodoUids![0]], nextSteps: [] },
++    ])
++      assert.throws(
++        () => addStatus(db, { ...input, ...change }),
++        /conflicting entry uid/,
++      );
++    const blank = {
++      uid: randomUUID(),
++      project: "demo",
++      summary: "Plain",
++      nextMode: "carry",
++      occurredAt: "2026-04-01T00:00:00Z",
++    };
++    assert.equal(addStatus(db, blank).inserted, true);
++    assert.equal(addStatus(db, blank).inserted, false);
++    const refs = {
++      uid: randomUUID(),
++      project: "demo",
++      summary: "Refs",
++      nextMode: "carry",
++      nextTodoUids: [a.nextTodoUids![0]],
++      occurredAt: "2026-05-01T00:00:00Z",
++    };
++    assert.equal(addStatus(db, refs).inserted, true);
++    assert.equal(addStatus(db, refs).inserted, false);
++    assert.deepEqual(
++      addStatus(db, { project: "demo", summary: "Default" }).entry.nextTodoUids,
++      [],
++    );
++    importLedger(db, [legacyInput("legacy")]);
++    const legacy = {
++      uid: randomUUID(),
++      project: "legacy",
++      summary: "Carry old",
++      nextMode: "carry",
++      occurredAt: "2026-06-01T00:00:00Z",
++    };
++    assert.equal(addStatus(db, legacy).inserted, true);
++    assert.equal(addStatus(db, legacy).inserted, false);
++    const convert = current(db, "legacy")[0];
++    convertNextStep(db, convert.uid, 0);
++    assert.equal(addStatus(db, legacy).inserted, false);
++  } finally {
++    db.close();
++  }
++});
++
++cliTest(
++  "AC13: external-ref replay bypasses close/reuse/carry and changes no Todos",
++  (cli, db) => {
++    const a = JSON.parse(cli(addArgs("First", "--next", "A"))) as StatusEntry;
++    const args = addArgs(
++      "Close A",
++      "--next",
++      "B",
++      "--done-todo",
++      a.nextTodoUids![0],
++      "--external-ref",
++      "replay",
++    );
++    const first = JSON.parse(cli(args)) as StatusEntry;
++    updateTodo(db, a.nextTodoUids![0], { status: "open" });
++    const before = exportLedger(db);
++    const replay = JSON.parse(
++      cli([...args, "--cancel-todo", randomUUID()]),
++    ) as StatusEntry;
++    assert.equal(replay.uid, first.uid);
++    assert.deepEqual(exportLedger(db), before);
++  },
++);
++
++cliTest(
++  "AC14: help, aliases, text output, and unknown flag validation",
++  (cli) => {
++    assert.match(cli(["--help"]), /next\s+List all open work/);
++    assert.match(cli(["--help"]), /todo-convert/);
++    for (const flag of ["replace-next", "done-todo", "cancel-todo"])
++      assert.match(cli(["add", "--help"]), new RegExp(`--${flag}`));
++    assert.match(cli(["todo-convert", "--help"]), /--all/);
++    assert.deepEqual(
++      JSON.parse(cli(["status", "next", "--project", "unknown", "--json"])),
++      [],
++    );
++    assert.equal(cli(["next"]), "No open work.\n");
++    cli(addArgs("Start", "--next", "A"));
++    assert.match(cli(["next"]), /^demo\t[\da-f-]+\tpinned\tA\n$/);
++    for (const action of ["next", "todo-convert", "add"])
++      assert.throws(() => cli([action, "--typo", "x"]), /unknown flag/);
++    for (const flag of ["replace-next", "done-todo", "cancel-todo", "all"])
++      assert.throws(
++        () =>
++          cli([
++            "current",
++            `--${flag}`,
++            ...(flag.endsWith("todo") ? [randomUUID()] : []),
++          ]),
++        /unknown flag/,
++      );
++  },
++);
++
++test("R4 validation and ownership roll back close operations", () => {
++  const db = openLedger(":memory:");
++  try {
++    addStatus(db, { project: "other", summary: "Other" });
++    const foreign = createTodo(db, { project: "other", title: "Foreign" });
++    const loose = createTodo(db, { title: "Loose" });
++    addStatus(db, {
++      project: "demo",
++      summary: "Pin loose",
++      nextTodoUids: [loose.uid],
++    });
++    const before = exportLedger(db);
++    for (const closeTodos of [
++      [{ uid: foreign.uid, status: "completed" }],
++      [{ uid: loose.uid, status: "open" }],
++      [{ uid: loose.uid, status: "completed", extra: true }],
++      null,
++    ])
++      assert.throws(() =>
++        addStatus(db, { project: "demo", summary: "Invalid", closeTodos }),
++      );
++    assert.throws(() =>
++      addStatus(db, {
++        project: "demo",
++        summary: "Invalid",
++        nextMode: "append",
++      }),
++    );
++    assert.deepEqual(exportLedger(db), before);
++    const closed = addStatus(db, {
++      project: "demo",
++      summary: "Close loose",
++      nextMode: "carry",
++      closeTodos: [{ uid: loose.uid, status: "cancelled" }],
++    }).entry;
++    assert.deepEqual(closed.nextTodoUids, []);
++    assert.deepEqual(openWork(db, "demo"), []);
++    assert.throws(
++      () =>
++        importLedger(db, [
++          { project: "demo", summary: "Not portable", nextMode: "carry" },
++        ]),
++      /unknown field/,
++    );
++  } finally {
++    db.close();
++  }
++});
++
++cliTest(
++  "duplicate titles stay separate even when the first occurrence reuses prior work",
++  (cli, db) => {
++    cli(addArgs("Base", "--next", "A"));
++    const prior = listTodos(db)[0];
++    const entry = JSON.parse(
++      cli(addArgs("Duplicate", "--next", "A", "--next", "A")),
++    ) as StatusEntry;
++    assert.equal(entry.nextTodoUids?.length, 2);
++    assert.equal(entry.nextTodoUids?.[0], prior.uid);
++    assert.equal(listTodos(db).length, 2);
++  },
++);
++
++test("carried refs respect the existing portable limit and roll back atomically", () => {
++  const db = openLedger(":memory:");
++  try {
++    addStatus(db, {
++      project: "demo",
++      summary: "Full",
++      nextSteps: Array.from({ length: 100 }, (_, i) => `Task ${i}`),
++    });
++    const before = exportLedger(db);
++    assert.throws(
++      () =>
++        addStatus(db, {
++          project: "demo",
++          summary: "Overflow",
++          nextMode: "carry",
++          nextSteps: ["New"],
++        }),
++      /at most 100/,
++    );
++    assert.deepEqual(exportLedger(db), before);
++  } finally {
++    db.close();
++  }
++});
++
++test("openWork preserves pin gaps and orders equal-time backlog by UID", () => {
++  const db = openLedger(":memory:");
++  try {
++    const first = addStatus(db, {
++      project: "demo",
++      summary: "Pins",
++      nextSteps: ["Closed", "Pinned"],
++    }).entry;
++    const a = createTodo(db, { title: "A", project: "demo" });
++    const b = createTodo(db, { title: "B", project: "demo" });
++    db.prepare("UPDATE todos SET created_at = ? WHERE uid IN (?, ?)").run(
++      "2026-01-01T00:00:00.000Z",
++      a.uid,
++      b.uid,
++    );
++    updateTodo(db, first.nextTodoUids![0], { status: "completed" });
++    const work = openWork(db, "demo");
++    assert.deepEqual(
++      work.map((item) => item.pinIndex),
++      [1, null, null],
++    );
++    assert.deepEqual(
++      work.slice(1).map((item) => item.kind === "todo" && item.uid),
++      [a.uid, b.uid].sort(),
++    );
++    assert.equal(listTodos(db).length, 4);
++  } finally {
++    db.close();
++  }
++});
++
++cliTest(
++  "partial legacy carry can close converted work without resurrecting its string",
++  (cli, db) => {
++    const entry = importLedger(db, [legacyInput()])[0].entry;
++    const converted = convertNextStep(db, entry.uid, 0);
++    const copied = JSON.parse(
++      cli(addArgs("Close legacy", "--cancel-todo", converted.uid)),
++    ) as StatusEntry;
++    assert.deepEqual(copied.nextSteps, ["A", "B"]);
++    assert.equal(copied.nextStepsSourceUid, entry.uid);
++    assert.deepEqual(
++      openWork(db, "demo").map((item) => [
++        item.kind,
++        item.title,
++        item.pinIndex,
++      ]),
++      [["legacy-step", "B", 1]],
++    );
++    const before = exportLedger(db);
++    assert.throws(
++      () =>
++        cli(
++          addArgs(
++            "Fail after close",
++            "--done-todo",
++            converted.uid,
++            "--next",
++            "New",
++          ),
++        ),
++      /unconverted legacy/,
++    );
++    assert.deepEqual(exportLedger(db), before);
++  },
++);
++
++test("only current pins authorize closing an unassigned Todo", () => {
++  const db = openLedger(":memory:");
++  try {
++    const loose = createTodo(db, { title: "Loose" });
++    addStatus(db, {
++      project: "demo",
++      summary: "Pin",
++      nextTodoUids: [loose.uid],
++    });
++    addStatus(db, { project: "demo", summary: "Unpin" });
++    assert.throws(
++      () =>
++        addStatus(db, {
++          project: "demo",
++          summary: "Close historical",
++          closeTodos: [{ uid: loose.uid, status: "completed" }],
++        }),
++      /does not belong/,
++    );
++    assert.equal(listTodos(db)[0].status, "open");
++  } finally {
++    db.close();
++  }
++});
++
++test("carry fixed-UID closing retries never reapply closures", () => {
++  const db = openLedger(":memory:");
++  try {
++    const entry = addStatus(db, {
++      project: "demo",
++      summary: "First",
++      nextSteps: ["A"],
++    }).entry;
++    const input = {
++      uid: randomUUID(),
++      project: "demo",
++      summary: "Close",
++      nextMode: "carry",
++      nextSteps: ["B"],
++      closeTodos: [{ uid: entry.nextTodoUids![0], status: "completed" }],
++      occurredAt: "2026-11-03T00:00:00Z",
++    };
++    assert.equal(addStatus(db, input).inserted, true);
++    updateTodo(db, entry.nextTodoUids![0], { status: "open" });
++    const before = exportLedger(db);
++    assert.equal(addStatus(db, input).inserted, false);
++    assert.deepEqual(exportLedger(db), before);
++  } finally {
++    db.close();
++  }
++});
++
++test("carry and reuse keep new Todo provenance at the final ref index for portable round trips", () => {
++  const db = openLedger(":memory:");
++  const copy = openLedger(":memory:");
++  try {
++    addStatus(db, { project: "demo", summary: "A", nextSteps: ["A"] });
++    const entry = addStatus(db, {
++      project: "demo",
++      summary: "B",
++      nextMode: "carry",
++      nextSteps: ["A", "B", "A"],
++    }).entry;
++    for (const todo of listTodos(db)) {
++      if (todo.entryUid === entry.uid)
++        assert.equal(entry.nextTodoUids![todo.stepIndex!], todo.uid);
++    }
++    const bundle = exportLedger(db);
++    importLedger(copy, [bundle]);
++    assert.deepEqual(exportLedger(copy), bundle);
++    assert.equal(
++      addStatus(copy, {
++        project: "demo",
++        summary: "C",
++        nextMode: "carry",
++        nextSteps: ["C"],
++      }).entry.nextTodoUids?.length,
++      4,
++    );
++  } finally {
++    copy.close();
++    db.close();
++  }
++});
++
++test("R4.5 strict suffix documents the R4.1 conflict for re-pinning an earlier carried UID", () => {
++  const db = openLedger(":memory:");
++  try {
++    const first = addStatus(db, {
++      project: "demo",
++      summary: "Pins",
++      nextSteps: ["A", "B"],
++    }).entry;
++    for (const work of [
++      { nextSteps: ["A"] },
++      { nextTodoUids: [first.nextTodoUids![0]] },
++    ]) {
++      const input = {
++        uid: randomUUID(),
++        project: "demo",
++        summary: "Re-pin A",
++        nextMode: "carry",
++        occurredAt: "2026-11-03T00:00:00Z",
++        ...work,
++      };
++      assert.deepEqual(
++        addStatus(db, input).entry.nextTodoUids,
++        first.nextTodoUids,
++      );
++      // R4.1 keeps A first; it is not the suffix required by R4.5. See Round 1 L2.
++      assert.throws(() => addStatus(db, input), /conflicting entry uid/);
++    }
++  } finally {
++    db.close();
++  }
++});

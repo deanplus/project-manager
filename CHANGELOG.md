@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.1 - 2026-11-02
+
+### Added
+
+- Export `openWork(db, project?)` and expose it through `pmgr next` / `pmgr status next`, combining open pins, unpinned Todos, and unconverted legacy steps.
+- Add live `openWork` to CLI `current --json` and show open work with pin markers in text mode. Historical reads retain their previous shape.
+- Add repeatable `add --done-todo` / `--cancel-todo` for atomic closures and `todo-convert` by entry/index, project, or all current legacy sources.
+
+### Changed
+
+- **CLI behavior change:** plain `add` now keeps open pins; `--next` and `--next-todo` append (first-occurrence uid order). Use `--replace-next` to replace or clear pins without changing Todo status. Domain `addStatus` still defaults to replace; imports/exports stay unchanged. Fixed-uid re-pin of an already-carried pin remains a documented L2 limitation for direct API callers.
+- Reuse prior open Todos for exact trimmed `--next` titles, including unassigned Todos already pinned on the project, preferring pinned work, then the oldest Todo, while preserving provenance. Duplicate new titles in one write still create separate Todos.
+- Make `pmgr next --json` the daily checklist and guide agents to keep, finish, or explicitly retire work before adding new actions. Legacy carry preserves unconverted strings until explicit conversion. No automatic cancellation.
+- CLI `current` builds open work in one scan and groups it per project instead of re-querying each project.
+- Translate the new Todo/open-work section of `README_CN.md` into Chinese and document the L2 fixed-UID retry limitation in the architecture notes.
+
 ## 0.5.0 - 2026-10-29
 
 ### Added

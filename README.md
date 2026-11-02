@@ -337,9 +337,12 @@ Independently migrated copies of legacy data receive different UUIDs. Cross-impo
 ### Todos and dashboard actions
 
 Todos own actionable work. A new status snapshot stores ordered `nextTodoUids`
-and does not persist next-step prose. `add --next` creates one Todo per title
-and stores those UIDs in the same transaction. Repeating the same text on a
-later snapshot creates new Todos; pass `--next-todo` to keep existing work.
+and does not persist next-step prose. CLI `add` now carries open pins by default;
+plain `add` no longer clears them, and `--next` appends new work. An exact,
+case-sensitive title (after trimming) reuses a prior open Todo in that project
+or an unassigned Todo already pinned on it, preferring a current pin, then the oldest Todo. Provenance stays unchanged.
+Duplicate new titles within one write still create separate Todos.
+Use `--next-todo` to pin an existing UID explicitly.
 Do not combine `--next` with `--next-todo`. Duplicate UIDs in one list are rejected.
 
 ```sh
@@ -348,28 +351,48 @@ pmgr add --project demo --status active --summary "Review queued" \
 pmgr todo-add --title "Unassigned idea" --json
 pmgr add --project demo --status active --summary "Pin the idea" \
   --next-todo <todo-uuid> --source agent --json
-pmgr todos --project demo --status open --json
+pmgr next --project demo --json
 pmgr todo-update --uid <todo-uuid> --status completed --json
 pmgr todo-update --uid <todo-uuid> --status cancelled --json
 ```
 
-`todos --status open` answers open work from Todos, not from string next steps.
-With `--project`, UIDs pinned on the current snapshot are ordered first.
-Completing or cancelling a Todo updates every resolved view and does not rewrite
-snapshots. Omitting a UID from a newer snapshot unpins it and does not change
-the Todo status.
+The canonical daily checklist is `pmgr next --json` (also `pmgr status next`).
+Do not combine `nextSteps`, `nextTodos`, and `todos` by hand. Before every `add`,
+run `pmgr next --project P --json` and decide each item: keep it (do nothing;
+existing pins carry), finish it with `--done-todo <uid>`, or retire superseded
+work with `--cancel-todo <uid>`. Both close flags are repeatable and run in the
+same transaction as the snapshot. Unpinned work remains visible in the backlog.
+Use `--next` only for new actions, never status descriptions; put blockers in
+`--blocker`. No Todo is automatically cancelled by age or similarity.
 
-Legacy snapshots keep string `nextSteps` and omit `nextTodoUids`. Convert each
-index explicitly; conversion does not append a snapshot. While any source index
-is still unconverted, a completion follow-up copies the full string list and
-`nextStepsSourceUid`. After every index has a Todo, the follow-up materializes
-`nextTodoUids` in source-index order and does not create Todos or change status.
-A snapshot never stores both prose and refs.
+`--replace-next` restores replacement behavior: without next work it unpins
+everything; with next work it pins only those UIDs. It never closes Todos.
+The domain `addStatus` API still defaults to `nextMode: "replace"`; CLI `add`
+passes `"carry"` unless `--replace-next` is present. Imports stay strict.
 
-`current` and `history` include stored `nextTodoUids` plus live `nextTodos`
-(`uid`, `title`, `status`, `project`). That view is the Todo now, not its state
-at the snapshot time. `at` returns the stored snapshot, including refs when
-present, and does not add the live view.
+Legacy snapshots retain strings until explicitly converted. A plain carry-mode
+`add` preserves the full legacy list and `nextStepsSourceUid` while any index is
+unconverted; adding new next work then requires conversion or `--replace-next`.
+Conversion is idempotent and appends no snapshot:
+
+```sh
+pmgr todo-convert --entry <id-or-uid> --index 0 --json
+pmgr todo-convert --project demo --json
+# Back up before an explicit, user-run conversion of every current legacy source.
+pmgr export --format json > backup.json
+pmgr todo-convert --all --json
+```
+
+Once all source indices have Todos, the next carry-mode `add` materializes refs
+in index order, filtering out closed Todos. Historical snapshots stay unchanged.
+`next` combines converted Todos and unconverted strings without duplicates.
+
+`current --json` adds live `openWork` for each project's checklist, while its
+stored `nextSteps`, `nextTodoUids`, and live `nextTodos` retain their previous
+meaning, including closed pins. Text `current` prints open work with `[pinned]`
+markers. `history`, `at`, and `getEntry` do not gain `openWork`; `history` text
+and `completeActivity` follow-up copying stay unchanged. `at` returns stored
+snapshots without live Todo resolution.
 
 A snapshot may reference Todos that are unassigned or already in that project.
 If a Todo appears in any `nextTodoUids`, or is linked to a source entry, its

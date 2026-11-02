@@ -1,0 +1,1 @@
+Isolated closeout: current -> next -> add -> current verified; project=project-mgr; record=1; temporary DB removed. Real ledger never opened.

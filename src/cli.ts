@@ -5,6 +5,10 @@ import { pathToFileURL } from "node:url";
 import {
   addStatus,
   createTodo,
+  convertNextStep,
+  getEntry,
+  openWork,
+  openWorkByProject,
   listTodos,
   updateTodo,
   at,
@@ -33,6 +37,8 @@ const booleanFlags = new Set([
   "no-open",
   "help",
   "version",
+  "replace-next",
+  "all",
 ]);
 const repeats = new Set([
   "next",
@@ -41,6 +47,8 @@ const repeats = new Set([
   "decision",
   "tag",
   "completes",
+  "done-todo",
+  "cancel-todo",
 ]);
 
 function parse(argv: string[]): { command: string[]; flags: Flags } {
@@ -90,6 +98,9 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
       "blocker",
       "next",
       "next-todo",
+      "replace-next",
+      "done-todo",
+      "cancel-todo",
       "decision",
       "tag",
       "at",
@@ -101,6 +112,8 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
   ],
   ["todo-add", new Set(["title", "project", "entry", "json"])],
   ["todos", new Set(["project", "status", "json"])],
+  ["next", new Set(["project", "json"])],
+  ["todo-convert", new Set(["entry", "index", "project", "all", "json"])],
   ["todo-update", new Set(["uid", "status", "project", "json"])],
   ["complete", new Set(["entry", "by", "reason", "source", "json"])],
   ["revoke-completion", new Set(["entry", "by", "reason", "source", "json"])],
@@ -130,6 +143,11 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
 ]);
 
 const commandHelp: Record<string, [string, string]> = {
+  next: ["List all open work, pinned first", "[--project <name>] [--json]"],
+  "todo-convert": [
+    "Convert legacy next steps without appending a snapshot",
+    "--entry <id-or-uid> --index <n> | --project <name> | --all [--json]",
+  ],
   "todo-add": [
     "Create an independent or linked Todo",
     "--title <text> [--project <name>] [--entry <uid>] [--json]",
@@ -144,7 +162,7 @@ const commandHelp: Record<string, [string, string]> = {
   ],
   add: [
     "Append a status snapshot",
-    "--project <name> --summary <text> [--next <text> | --next-todo <uid>] [options]",
+    "--project <name> --summary <text> [--next <text> | --next-todo <uid>] [--replace-next] [--done-todo <uid>] [--cancel-todo <uid>] [options]",
   ],
   complete: [
     "Link a completed activity to its follow-up",
@@ -225,7 +243,7 @@ function validateInvocation(command: string[], flags: Flags): string {
     typeof action === "string" ? allowedFlags.get(action) : undefined;
   if (typeof action !== "string" || !allowed)
     throw new ValidationError(
-      "usage: pmgr <add|complete|revoke-completion|import|current|projects|list|set-project|history|at|export|serve> (or: pmgr status <action>)",
+      "usage: pmgr <add|next|todo-add|todos|todo-update|todo-convert|complete|revoke-completion|import|current|projects|list|set-project|history|at|export|serve> (or: pmgr status <action>)",
     );
   const positional = command.slice(statusCommand ? 2 : 1);
   if (action === "import") {
@@ -277,7 +295,7 @@ function output(
     const rows = value
       .map(
         (entry) =>
-          `${entry.project}\t${entry.effectiveStatus ?? entry.status}\t${entry.occurredAt}\t${entry.summary}${entry.completedBy ? ` (completed by #${entry.completedBy.id}; original: ${entry.status})` : ""}`,
+          `${entry.project}\t${entry.effectiveStatus ?? entry.status}\t${entry.occurredAt}\t${entry.summary}${entry.completedBy ? ` (completed by #${entry.completedBy.id}; original: ${entry.status})` : ""}${entry.openWork ? entry.openWork.map((item: { title: string; pinned: boolean }) => `\n  - ${item.title}${item.pinned ? " [pinned]" : ""}`).join("") : ""}`,
       )
       .join("\n");
     write(`${rows || "No entries found."}\n`);
@@ -366,6 +384,65 @@ export function run(
   const json = flags.json === true;
   try {
     switch (action) {
+      case "next": {
+        const items = openWork(db, stringFlag(flags, "project"));
+        if (json) output(items, true, write);
+        else
+          write(
+            items.length
+              ? items
+                  .map(
+                    (item) =>
+                      `${item.project ?? "-"}\t${item.kind === "todo" ? item.uid : `${item.entryUid}#${item.stepIndex}`}\t${item.pinned ? "pinned" : "-"}\t${item.title}`,
+                  )
+                  .join("\n") + "\n"
+              : "No open work.\n",
+          );
+        break;
+      }
+      case "todo-convert": {
+        const ref = stringFlag(flags, "entry");
+        const project = stringFlag(flags, "project");
+        if (
+          Number(ref !== undefined) +
+            Number(project !== undefined) +
+            Number(flags.all === true) !==
+          1
+        )
+          throw new ValidationError(
+            "use exactly one of --entry, --project, or --all",
+          );
+        if ((ref === undefined) !== (flags.index === undefined))
+          throw new ValidationError(
+            "--entry requires --index; --index requires --entry",
+          );
+        const todos = db
+          .transaction(() => {
+            if (ref !== undefined)
+              return [convertNextStep(db, ref, numberFlag(flags, "index", 0))];
+            return current(db, project).flatMap((entry) => {
+              if (entry.nextTodoUids !== undefined) return [];
+              const source = entry.nextStepsSourceUid
+                ? getEntry(db, entry.nextStepsSourceUid)!
+                : entry;
+              return source.nextSteps.map((_, index) =>
+                convertNextStep(db, source.uid, index),
+              );
+            });
+          })
+          .immediate();
+        if (json) output(todos, true, write);
+        else
+          write(
+            todos
+              .map(
+                (todo) =>
+                  `${todo.uid}\t${todo.status}\t${todo.project}\t${todo.title}`,
+              )
+              .join("\n") + "\n",
+          );
+        break;
+      }
       case "todo-add":
         output(
           createTodo(db, {
@@ -438,6 +515,17 @@ export function run(
                 progress: stringFlag(flags, "progress"),
                 blockers: listFlag(flags, "blocker"),
                 nextSteps: next,
+                nextMode: flags["replace-next"] === true ? "replace" : "carry",
+                closeTodos: [
+                  ...listFlag(flags, "done-todo").map((uid) => ({
+                    uid,
+                    status: "completed",
+                  })),
+                  ...listFlag(flags, "cancel-todo").map((uid) => ({
+                    uid,
+                    status: "cancelled",
+                  })),
+                ],
                 ...(nextTodo.length > 0 ? { nextTodoUids: nextTodo } : {}),
                 decisions: listFlag(flags, "decision"),
                 tags: listFlag(flags, "tag"),
@@ -483,9 +571,20 @@ export function run(
           write,
         );
         break;
-      case "current":
-        output(current(db, stringFlag(flags, "project")), json, write);
+      case "current": {
+        const project = stringFlag(flags, "project");
+        // One open-work scan for all projects, grouped per project.
+        const { groups } = openWorkByProject(db, project);
+        output(
+          current(db, project).map((entry) => ({
+            ...entry,
+            openWork: groups.get(entry.project)!,
+          })),
+          json,
+          write,
+        );
         break;
+      }
       case "projects":
       case "list":
         outputProjects(

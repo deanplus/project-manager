@@ -64,10 +64,12 @@ pmgr list --query "keyword" --json
 pmgr serve --port 3000 --no-open --json
 
 # Record a completed milestone while the project remains active.
-# --next creates Todos and stores their UIDs on the snapshot. Reuse work with --next-todo.
+# Inspect open work before every add. Existing open pins carry automatically.
+pmgr next --project my-project --json
+# Use --next for new actions; exact prior open titles reuse their Todo UID.
 pmgr add --project my-project --status active --summary "Implemented the CLI" \
   --progress "Tests pass" --next "Publish the package" --source agent --json
-pmgr todos --project my-project --status open --json
+pmgr next --project my-project --json
 
 # Same project, with a tag naming the sub-project this snapshot covers.
 pmgr add --project acme --status active --summary "Shipped the web dashboard" \
@@ -94,4 +96,37 @@ When this update resolves all commitments of earlier entries (including blockers
 
 Use `complete --entry <id-or-uid> --by <id-or-uid> --source agent` for an existing follow-up. Use `revoke-completion --entry <id-or-uid> --by <id-or-uid> --reason "..." --source agent` to correct a mistaken link. Links require the same project and strictly increasing occurrence times. Query the affected history afterward to verify effective completion. Do not bulk-close old entries without evidence.
 
-Export produces a version-2 bundle when there are no Todos or refs, version 3 when Todos exist without refs, and version 4 when snapshots store `nextTodoUids` (one bundle per line for JSONL). Legacy imports remain supported and do not create Todos. Open work is `todos --status open`; current `nextTodoUids` only order that project's open items. Do not combine `--next` with `--next-todo`. Repeating `--next` text on a later snapshot creates a new Todo; pass existing UIDs to keep the same work. Cancelling or completing a Todo is `todo-update`, not deleting text from a snapshot. `at` has no completion annotations and does not resolve live Todo status. Project current state still comes from the latest snapshot.
+## Daily open-work checklist
+
+Use `pmgr next --json` as the canonical daily checklist. Do not combine
+`nextSteps`, `nextTodos`, and `todos` by hand. Before every `add`, run
+`pmgr next --project P --json`. Decide each item from evidence: keep it (do
+nothing; open pins carry), finish it (`--done-todo <uid>`), or retire superseded
+work (`--cancel-todo <uid>`). Close flags are repeatable and atomic with `add`.
+Unpinned Todos remain visible as backlog; pin them explicitly with `--next-todo`.
+Use `--next` only for new actions, not status descriptions. Put blockers in
+`--blocker`. Never cancel older or similar work automatically.
+
+CLI behavior change: plain `add` keeps open pins instead of clearing them;
+`--next` appends. Exact trimmed, case-sensitive titles reuse an existing open
+Todo of the same project, or an unassigned Todo already pinned on it, preferring
+a pin, then the oldest by creation time and UID. Its provenance stays unchanged. Duplicate new titles in one write still
+create separate Todos. Do not combine `--next` and `--next-todo`.
+`--replace-next` only replaces pins (or clears them with no next work); it does
+not close Todos. The domain API defaults to replace; imports remain strict.
+
+Legacy strings appear as `legacy-step` items until explicitly converted with
+`pmgr todo-convert --project P --json`, or `--entry <id-or-uid> --index <n>`.
+`--all` converts every current legacy source only when the user requests it;
+back up first with `pmgr export --format json > backup.json`. Conversion is
+idempotent and appends no snapshot. A plain `add` preserves partially converted
+legacy strings; new next work requires conversion or `--replace-next`.
+Once fully converted, the next carry-mode `add` pins the open converted Todos
+in index order.
+
+`current --json` adds live `openWork`, and text `current` marks pinned work.
+Raw `nextSteps`, `nextTodoUids`, and `nextTodos` retain their existing meaning.
+`history`, `at`, and `getEntry` do not gain `openWork`; `at` does not resolve
+live Todo status. Project current state still comes from the latest snapshot.
+Export emits version 2 without Todos/refs, version 3 with Todos but no refs,
+and version 4 with refs. Import/export never carries, reuses, or closes work.

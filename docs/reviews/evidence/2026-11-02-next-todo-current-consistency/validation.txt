@@ -1,0 +1,364 @@
+Author final verification: pnpm test: 58/58 passed; pnpm exec tsc --noEmit: exit 0; pnpm exec eslint .: exit 0; touched-file prettier --check: exit 0; git diff --check: exit 0. No commits, pushes, publication, or real-ledger access.
+
+
+> project-mgr@0.5.0 test /Users/dwong/mydoc/code/projects/project-mgr
+> tsx --test test/**/*.test.ts
+
+TAP version 13
+# Subtest: help and version do not open the ledger; aliases and command help work
+ok 1 - help and version do not open the ledger; aliases and command help work
+  ---
+  duration_ms: 248.064334
+  type: 'test'
+  ...
+# Subtest: completion propagates explicitly, survives filtering, revokes, and preserves snapshots
+ok 2 - completion propagates explicitly, survives filtering, revokes, and preserves snapshots
+  ---
+  duration_ms: 15.325209
+  type: 'test'
+  ...
+# Subtest: portable bundles preserve event chains, reject identity conflicts and import atomically
+ok 3 - portable bundles preserve event chains, reject identity conflicts and import atomically
+  ---
+  duration_ms: 6.080583
+  type: 'test'
+  ...
+# Subtest: CLI completion and revocation, metadata rollback, and JSONL bundle import
+ok 4 - CLI completion and revocation, metadata rollback, and JSONL bundle import
+  ---
+  duration_ms: 17.609375
+  type: 'test'
+  ...
+# Subtest: migration adds identities to legacy snapshots without changing content
+ok 5 - migration adds identities to legacy snapshots without changing content
+  ---
+  duration_ms: 13.437042
+  type: 'test'
+  ...
+# Subtest: domain normalizes valid values and rejects invalid input
+ok 6 - domain normalizes valid values and rejects invalid input
+  ---
+  duration_ms: 2.371125
+  type: 'test'
+  ...
+# Subtest: SQLite ledger migrates, appends, is idempotent, and queries by timeline
+ok 7 - SQLite ledger migrates, appends, is idempotent, and queries by timeline
+  ---
+  duration_ms: 13.363959
+  type: 'test'
+  ...
+# Subtest: import validates before transaction and default source is import
+ok 8 - import validates before transaction and default source is import
+  ---
+  duration_ms: 0.920625
+  type: 'test'
+  ...
+# Subtest: database path has a stable default and environment override creates its parent directory
+ok 9 - database path has a stable default and environment override creates its parent directory
+  ---
+  duration_ms: 2.358833
+  type: 'test'
+  ...
+# Subtest: CLI runs through a package-style symlink
+ok 10 - CLI runs through a package-style symlink
+  ---
+  duration_ms: 98.658375
+  type: 'test'
+  ...
+# Subtest: CLI supports add, import, reads, errors, project metadata, and export formats
+ok 11 - CLI supports add, import, reads, errors, project metadata, and export formats
+  ---
+  duration_ms: 30.178334
+  type: 'test'
+  ...
+# Subtest: domain accepts ref lists and rejects mixed, duplicate, and oversized values
+ok 12 - domain accepts ref lists and rejects mixed, duplicate, and oversized values
+  ---
+  duration_ms: 5.38075
+  type: 'test'
+  ...
+# Subtest: new writes store refs, keep Todo status independent, and resolve live rows
+ok 13 - new writes store refs, keep Todo status independent, and resolve live rows
+  ---
+  duration_ms: 2.547292
+  type: 'test'
+  ...
+# Subtest: legacy conversion keeps indexes until every step has a Todo, then materializes refs
+ok 14 - legacy conversion keeps indexes until every step has a Todo, then materializes refs
+  ---
+  duration_ms: 7.174875
+  type: 'test'
+  ...
+# Subtest: empty legacy completion materializes explicit refs and does not invent Todos
+ok 15 - empty legacy completion materializes explicit refs and does not invent Todos
+  ---
+  duration_ms: 1.760292
+  type: 'test'
+  ...
+# Subtest: ownership rejects cross-project refs and any project change after a historical pin
+ok 16 - ownership rejects cross-project refs and any project change after a historical pin
+  ---
+  duration_ms: 1.925834
+  type: 'test'
+  ...
+# Subtest: import fails atomically on dangling, mixed, and cross-project refs
+ok 17 - import fails atomically on dangling, mixed, and cross-project refs
+  ---
+  duration_ms: 2.410291
+  type: 'test'
+  ...
+# Subtest: open Todo listing prefers current pins and CLI rejects mixed next flags
+ok 18 - open Todo listing prefers current pins and CLI rejects mixed next flags
+  ---
+  duration_ms: 21.756541
+  type: 'test'
+  ...
+# Subtest: malformed todo imports and missing activity completion are rejected
+ok 19 - malformed todo imports and missing activity completion are rejected
+  ---
+  duration_ms: 4.455916
+  type: 'test'
+  ...
+# Subtest: non-Error mutation failures use the generic message
+ok 20 - non-Error mutation failures use the generic message
+  ---
+  duration_ms: 27.575917
+  type: 'test'
+  ...
+# Subtest: HTTP todo listing accepts a status filter
+ok 21 - HTTP todo listing accepts a status filter
+  ---
+  duration_ms: 32.862583
+  type: 'test'
+  ...
+# Subtest: importStatuses rejects dangling and cross-project refs atomically
+ok 22 - importStatuses rejects dangling and cross-project refs atomically
+  ---
+  duration_ms: 0.981667
+  type: 'test'
+  ...
+# Subtest: importLedger rejects refs whose Todos are absent from the payload
+ok 23 - importLedger rejects refs whose Todos are absent from the payload
+  ---
+  duration_ms: 1.078916
+  type: 'test'
+  ...
+# Subtest: fixed-UID text retries match the stored refs without duplicating Todos
+ok 24 - fixed-UID text retries match the stored refs without duplicating Todos
+  ---
+  duration_ms: 1.716667
+  type: 'test'
+  ...
+# Subtest: importStatuses cannot reference a Todo that already exists outside the payload
+ok 25 - importStatuses cannot reference a Todo that already exists outside the payload
+  ---
+  duration_ms: 0.509416
+  type: 'test'
+  ...
+# Subtest: import identity stays strict when a refs snapshot is rewritten as text
+ok 26 - import identity stays strict when a refs snapshot is rewritten as text
+  ---
+  duration_ms: 1.203625
+  type: 'test'
+  ...
+# Subtest: AC1-5: CLI carries pins, exposes live open work, and pins independent Todos
+ok 27 - AC1-5: CLI carries pins, exposes live open work, and pins independent Todos
+  ---
+  duration_ms: 30.454166
+  type: 'test'
+  ...
+# Subtest: AC3: cancelling the only pin leaves an empty checklist and raw current pins
+ok 28 - AC3: cancelling the only pin leaves an empty checklist and raw current pins
+  ---
+  duration_ms: 7.142458
+  type: 'test'
+  ...
+# Subtest: AC6,8: close and replace are atomic; unpinning never changes status
+ok 29 - AC6,8: close and replace are atomic; unpinning never changes status
+  ---
+  duration_ms: 14.956458
+  type: 'test'
+  ...
+# Subtest: AC7: exact titles reuse prior open Todos; duplicate new titles stay separate
+ok 30 - AC7: exact titles reuse prior open Todos; duplicate new titles stay separate
+  ---
+  duration_ms: 8.362833
+  type: 'test'
+  ...
+# Subtest: AC9-10: legacy carry preserves source; conversion is idempotent and materializes open refs
+ok 31 - AC9-10: legacy carry preserves source; conversion is idempotent and materializes open refs
+  ---
+  duration_ms: 19.066834
+  type: 'test'
+  ...
+# Subtest: legacy replace explicitly bypasses conversion and conversion validates selectors
+ok 32 - legacy replace explicitly bypasses conversion and conversion validates selectors
+  ---
+  duration_ms: 5.786
+  type: 'test'
+  ...
+# Subtest: AC11: global open work groups projects, de-duplicates shared pins, and ends with unassigned
+ok 33 - AC11: global open work groups projects, de-duplicates shared pins, and ends with unassigned
+  ---
+  duration_ms: 1.373083
+  type: 'test'
+  ...
+# Subtest: R4.4 prefers pinned exact matches, then oldest createdAt/uid, and preserves provenance
+ok 34 - R4.4 prefers pinned exact matches, then oldest createdAt/uid, and preserves provenance
+  ---
+  duration_ms: 1.699833
+  type: 'test'
+  ...
+# Subtest: AC12-13: domain defaults replace; carry retries use stored suffix despite status changes
+ok 35 - AC12-13: domain defaults replace; carry retries use stored suffix despite status changes
+  ---
+  duration_ms: 2.931292
+  type: 'test'
+  ...
+# Subtest: AC13: external-ref replay bypasses close/reuse/carry and changes no Todos
+ok 36 - AC13: external-ref replay bypasses close/reuse/carry and changes no Todos
+  ---
+  duration_ms: 5.243083
+  type: 'test'
+  ...
+# Subtest: AC14: help, aliases, text output, and unknown flag validation
+ok 37 - AC14: help, aliases, text output, and unknown flag validation
+  ---
+  duration_ms: 4.337666
+  type: 'test'
+  ...
+# Subtest: R4 validation and ownership roll back close operations
+ok 38 - R4 validation and ownership roll back close operations
+  ---
+  duration_ms: 1.539125
+  type: 'test'
+  ...
+# Subtest: duplicate titles stay separate even when the first occurrence reuses prior work
+ok 39 - duplicate titles stay separate even when the first occurrence reuses prior work
+  ---
+  duration_ms: 3.979208
+  type: 'test'
+  ...
+# Subtest: carried refs respect the existing portable limit and roll back atomically
+ok 40 - carried refs respect the existing portable limit and roll back atomically
+  ---
+  duration_ms: 3.897459
+  type: 'test'
+  ...
+# Subtest: openWork preserves pin gaps and orders equal-time backlog by UID
+ok 41 - openWork preserves pin gaps and orders equal-time backlog by UID
+  ---
+  duration_ms: 0.844125
+  type: 'test'
+  ...
+# Subtest: partial legacy carry can close converted work without resurrecting its string
+ok 42 - partial legacy carry can close converted work without resurrecting its string
+  ---
+  duration_ms: 5.564959
+  type: 'test'
+  ...
+# Subtest: only current pins authorize closing an unassigned Todo
+ok 43 - only current pins authorize closing an unassigned Todo
+  ---
+  duration_ms: 1.066792
+  type: 'test'
+  ...
+# Subtest: carry fixed-UID closing retries never reapply closures
+ok 44 - carry fixed-UID closing retries never reapply closures
+  ---
+  duration_ms: 1.242125
+  type: 'test'
+  ...
+# Subtest: carry and reuse keep new Todo provenance at the final ref index for portable round trips
+ok 45 - carry and reuse keep new Todo provenance at the final ref index for portable round trips
+  ---
+  duration_ms: 2.814667
+  type: 'test'
+  ...
+# Subtest: R4.5 strict suffix documents the R4.1 conflict for re-pinning an earlier carried UID
+ok 46 - R4.5 strict suffix documents the R4.1 conflict for re-pinning an earlier carried UID
+  ---
+  duration_ms: 1.275833
+  type: 'test'
+  ...
+# Subtest: server handles Web UI and REST API request routing
+ok 47 - server handles Web UI and REST API request routing
+  ---
+  duration_ms: 11.145416
+  type: 'test'
+  ...
+# Subtest: entry detail endpoint includes completion evidence and handles missing entries
+ok 48 - entry detail endpoint includes completion evidence and handles missing entries
+  ---
+  duration_ms: 1.619458
+  type: 'test'
+  ...
+# Subtest: startServer initializes HTTP server, closes clean, and handles 500 error boundary
+ok 49 - startServer initializes HTTP server, closes clean, and handles 500 error boundary
+  ---
+  duration_ms: 16.525208
+  type: 'test'
+  ...
+# Subtest: openBrowser executes without throwing on all platforms
+ok 50 - openBrowser executes without throwing on all platforms
+  ---
+  duration_ms: 21.329833
+  type: 'test'
+  ...
+# Subtest: CLI serve command supports port, host, no-open, and json output
+ok 51 - CLI serve command supports port, host, no-open, and json output
+  ---
+  duration_ms: 10.186916
+  type: 'test'
+  ...
+# Subtest: getWebUIHTML defaults to Chinese and supports zh/en i18n switching
+ok 52 - getWebUIHTML defaults to Chinese and supports zh/en i18n switching
+  ---
+  duration_ms: 15.966667
+  type: 'test'
+  ...
+# Subtest: Todos are independent, source-linked, idempotent, portable, and leave history intact
+ok 53 - Todos are independent, source-linked, idempotent, portable, and leave history intact
+  ---
+  duration_ms: 12.035833
+  type: 'test'
+  ...
+# Subtest: legacy steps only convert explicitly; project-only todos survive scoped exports
+ok 54 - legacy steps only convert explicitly; project-only todos survive scoped exports
+  ---
+  duration_ms: 1.425167
+  type: 'test'
+  ...
+# Subtest: dashboard write APIs enforce local origin, validate input, and persist changes
+ok 55 - dashboard write APIs enforce local origin, validate input, and persist changes
+  ---
+  duration_ms: 59.802333
+  type: 'test'
+  ...
+# Subtest: Todo CLI creates, lists, and completes standalone work
+ok 56 - Todo CLI creates, lists, and completes standalone work
+  ---
+  duration_ms: 5.211167
+  type: 'test'
+  ...
+# Subtest: completing an older activity preserves current project context without duplicating Todos
+ok 57 - completing an older activity preserves current project context without duplicating Todos
+  ---
+  duration_ms: 3.013625
+  type: 'test'
+  ...
+# Subtest: HTTP body decoding preserves UTF-8 across chunks
+ok 58 - HTTP body decoding preserves UTF-8 across chunks
+  ---
+  duration_ms: 23.608542
+  type: 'test'
+  ...
+1..58
+# tests 58
+# suites 0
+# pass 58
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 397.486125

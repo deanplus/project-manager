@@ -335,8 +335,9 @@ pmgr revoke-completion --entry 12 --by 18 --reason "验收仍未完成" --source
 ### 待办与仪表板操作
 
 待办是具体工作的来源。新的状态快照按顺序存储 `nextTodoUids`，不再把下一步原文写入快照。
-`add --next` 会为每条标题创建一个待办，并在同一事务里写入这些 UID。
-之后的快照如果再次输入相同文本，会创建新的待办；要沿用已有工作，请传 `--next-todo`。
+CLI `add` 现在默认沿用仍处于 open 的钉住项：不带下一步的 `add` 不再清空它们，`--next` 会追加新工作。
+去掉首尾空白后，标题与该项目已有的 open 待办（或已钉在该项目上的未归属待办）完全一致（区分大小写）时，会复用那个待办：优先已钉住的，其次最早创建的。来源信息保持不变。
+同一次写入里重复的新标题仍会各自创建待办。要显式钉住已有 UID，请传 `--next-todo`。
 不要把 `--next` 和 `--next-todo` 写在同一次 `add` 里。同一列表里的重复 UID 会被拒绝。
 
 ```sh
@@ -345,24 +346,39 @@ pmgr add --project demo --status active --summary "已排队复查" \
 pmgr todo-add --title "未归属的想法" --json
 pmgr add --project demo --status active --summary "钉住这个想法" \
   --next-todo <todo-uuid> --source agent --json
-pmgr todos --project demo --status open --json
+pmgr next --project demo --json
 pmgr todo-update --uid <todo-uuid> --status completed --json
 pmgr todo-update --uid <todo-uuid> --status cancelled --json
 ```
 
-`todos --status open` 从待办而不是字符串下一步回答「还有哪些未完成工作」。
-加上 `--project` 时，当前快照钉住的 UID 会排在前面。
-完成或取消待办会立刻反映在所有解析视图上，且不会改写历史快照。
-新快照不再列入某个 UID，只表示它不再是当前下一步，不会改变该待办的状态。
+每日清单统一使用 `pmgr next --json`（也可写作 `pmgr status next`），不要手动拼接 `nextSteps`、`nextTodos` 和 `todos`。
+每次 `add` 之前先运行 `pmgr next --project P --json`，逐条决定：保留（什么都不做，已钉住的会自动沿用）、用 `--done-todo <uid>` 完成，或用 `--cancel-todo <uid>` 退役被取代的工作。
+这两个关闭参数可重复，并与快照在同一事务中执行。未钉住的工作仍会作为积压项显示。
+`--next` 只写新的行动，不写状态描述；阻塞写进 `--blocker`。系统不会按时间或相似度自动取消任何待办。
 
-旧快照保留字符串 `nextSteps`，并省略 `nextTodoUids`。转换仍按来源下标显式进行，且不会追加快照。
-只要还有来源下标未转换，完成活动时的后续快照会复制完整字符串列表和 `nextStepsSourceUid`。
-每个下标都已有待办之后，后续快照才按原下标顺序写入 `nextTodoUids`，不新建待办，也不改变状态。
-一条快照不能同时保存原文和引用。
+`--replace-next` 恢复替换语义：不带下一步时取消全部钉住，带下一步时只钉住这些 UID。它不会关闭待办。
+领域层 `addStatus` 默认仍是 `nextMode: "replace"`；CLI `add` 除非带 `--replace-next`，否则传 `"carry"`。导入仍保持严格校验。
+已知限制：领域 API 用固定 UID 重新钉住一个已沿用的待办时，原样重试会报 `conflicting entry uid`。CLI 不传固定 UID，`--external-ref` 重放不受影响。
 
-`current` 和 `history` 会带上存储的 `nextTodoUids`，以及实时的 `nextTodos`（`uid`、`title`、`status`、`project`）。
-这个视图是待办的当前状态，不是快照发生时的历史状态。
-`at` 返回当时的快照；如果存了引用就包含引用，但不会附加实时视图。
+旧快照保留字符串 `nextSteps`，并省略 `nextTodoUids`，直到显式转换。
+只要还有来源下标未转换，沿用模式的 `add`（以及完成活动时的后续快照）会复制完整字符串列表和 `nextStepsSourceUid`；此时要写入新的下一步，需先转换或使用 `--replace-next`。
+转换是幂等的，不会追加快照：
+
+```sh
+pmgr todo-convert --entry <id-or-uid> --index 0 --json
+pmgr todo-convert --project demo --json
+# 对所有当前旧快照做显式转换前，先备份；仅在用户要求时执行。
+pmgr export --format json > backup.json
+pmgr todo-convert --all --json
+```
+
+每个下标都已有待办之后，下一次沿用模式的 `add` 会按原下标顺序写入引用，并过滤掉已关闭的待办。历史快照保持不变。
+`next` 会合并已转换的待办和未转换的字符串，不会重复。
+
+`current --json` 为每个项目增加实时的 `openWork` 清单；存储的 `nextSteps`、`nextTodoUids` 以及实时的 `nextTodos` 含义不变，仍包含已关闭的钉住项。
+文本模式的 `current` 会列出未完成工作，并用 `[pinned]` 标出钉住项。
+`history`、`at` 和 `getEntry` 不带 `openWork`；`history` 文本输出和完成活动的后续快照复制规则不变。
+`at` 返回当时存储的快照，不附加实时待办状态。
 
 快照只能引用未归属的待办，或已经属于该项目的待办。
 待办一旦出现在任意 `nextTodoUids` 中，或关联了来源动态，就不能再改项目。
