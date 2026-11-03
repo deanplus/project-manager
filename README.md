@@ -189,12 +189,12 @@ pnpm start at \
 
 Optional arguments:
 
-- `--status`: One of `idea`, `planned`, `active`, `blocked`, `paused`, `completed`, or `archived` (`done` is accepted as an alias for `completed`). Defaults to `completed` if omitted.
+- `--status`: One of `idea`, `planned`, `active`, `blocked`, `paused`, `completed`, or `archived` (`done` is accepted as an alias for `completed`). Defaults to `completed` if omitted. It is the project's status: the latest snapshot supplies `current.status`, and open Todos do not keep the project `active`. Record a finished milestone in `--summary`/`--progress` and keep `active` while work continues.
 
 - `--description`: Project introduction or description (updates project metadata).
 - `--notes`: Persistent, medium-to-long-term project notes/remarks (e.g., architectural constraints, key caveats; updates project metadata).
-- `--progress`: Work already completed.
-- `--blocker`, `--next`, `--decision`, and `--tag`: May be specified repeatedly.
+- `--progress`: Work done, evidence, and watch/check context (topic, gate, next check, what was not verified).
+- `--blocker`, `--next`, `--decision`, and `--tag`: May be specified repeatedly. `--next` takes concrete actions only; see [Actions vs. watch items](#actions-vs-watch-items).
 - `--at`: When the status actually occurred. It must be an ISO 8601 timestamp with a timezone; defaults to the current time.
 - `--source`: `human`, `agent`, or `import`; defaults to `human`.
 - `--external-ref`: A globally idempotent key. A duplicate write to the same project returns the existing record; use by another project is an error.
@@ -357,13 +357,64 @@ pmgr todo-update --uid <todo-uuid> --status cancelled --json
 ```
 
 The canonical daily checklist is `pmgr next --json` (also `pmgr status next`).
-Do not combine `nextSteps`, `nextTodos`, and `todos` by hand. Before every `add`,
-run `pmgr next --project P --json` and decide each item: keep it (do nothing;
-existing pins carry), finish it with `--done-todo <uid>`, or retire superseded
-work with `--cancel-todo <uid>`. Both close flags are repeatable and run in the
-same transaction as the snapshot. Unpinned work remains visible in the backlog.
-Use `--next` only for new actions, never status descriptions; put blockers in
-`--blocker`. No Todo is automatically cancelled by age or similarity.
+Do not combine `nextSteps`, `nextTodos`, and `todos` by hand. `--done-todo <uid>`
+and `--cancel-todo <uid>` are repeatable and run in the same transaction as the
+snapshot. Unpinned work remains visible in the backlog. No Todo is automatically
+cancelled by age or similarity.
+
+#### Actions vs. watch items
+
+A Todo is concrete work. Before writing `--next`, ask: "If someone were free
+right now, could they start this and finish it by working on it?"
+
+| Kind         | Test result                                       | Where it goes                                                                                       |
+| ------------ | ------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Action       | Yes                                               | `--next` (a Todo)                                                                                   |
+| Timed action | Yes, at a known time                              | `--next`, with the time in the title                                                                |
+| Watch        | No; waits on a sample, an event, or a time window | Repo `todo.md` (gate, evidence) and a scheduled task for the check time; mention it in `--progress` |
+| Disclaimer   | Not work ("not verified this round")              | `--progress` only                                                                                   |
+
+`--blocker` is for something that stops an action. Do not add `--next` items
+that restate the snapshot's own accomplishment. Each item has one owner:
+
+| Surface        | Owns                                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------------ |
+| Repo `todo.md` | The repo's detailed backlog and watch items: gates, evidence, acceptance criteria                            |
+| Scheduled task | When a check runs                                                                                            |
+| project-mgr    | The project's current actions: short titles, at most about 5 pins, linking to detail instead of repeating it |
+
+#### Reconcile before every add
+
+1. Run `pmgr next --project P --json`.
+2. For each action being written, list open items on the same topic as
+   candidates. Keep a **duplicate** (same deliverable or occurrence) under its
+   existing UID; retire a **superseded** item (revised date, decision, or
+   scope) with `--cancel-todo` in the same `add`, stating the evidence in
+   `--progress`; leave **independent** actions on the same topic open.
+3. Reconcile only commitments this write touches; report other suspected
+   duplicates or watches instead of closing them.
+4. After the write, run `pmgr next --project P --json` again: each kept or new
+   open commitment appears once, and each completed or cancelled UID is absent
+   (check final statuses with `pmgr todos --project P --json` when needed).
+
+| Situation                                     | Command                                                                                                                                                       |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Keep a pinned item                            | Nothing; carry mode keeps it                                                                                                                                  |
+| Pin an existing unpinned item, no new work    | `add --next-todo <uid>`                                                                                                                                       |
+| New actions only                              | `add --next "<title>"`; check the returned UIDs                                                                                                               |
+| Keep or pin an existing item and add new work | `todo-add --project P --title "<new>" --json` per new action (record each UID), then one `add --next-todo <existing> --next-todo <new> [--cancel-todo <old>]` |
+
+The last form is several commands, not one transaction, and `add` commits
+before printing its result. After any failure or uncertain outcome, read
+`current`, `todos`, and the complete history (page `history --limit 100
+--offset <n>` until a short page; no `--since`) before retrying or cleaning up.
+If the final snapshot exists, keep every staged Todo. Otherwise cancel or reuse
+only Todos whose UIDs came from this attempt's `todo-add` output and that no
+snapshot ever referenced. If state is unreadable or a UID was not recorded,
+change nothing and report it. A watch Todo may be retired only after every gate
+it carries is recorded in its owning record and any promised check exists as a
+verified scheduled task. The [agent skill](skills/project-mgr/SKILL.md) spells
+out each step.
 
 `--replace-next` restores replacement behavior: without next work it unpins
 everything; with next work it pins only those UIDs. It never closes Todos.

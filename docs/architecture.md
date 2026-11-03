@@ -154,6 +154,20 @@ nothing, finish it with `--done-todo`, retire superseded work with `--cancel-tod
 and use `--next` only for new actions. Status prose belongs in summary/progress;
 blockers belong in `--blocker`. No age- or similarity-based cancellation occurs.
 
+A Todo is concrete work someone can start now (or at a stated time) and finish
+by working on it. Watch items (waiting on samples, external events, or time
+windows) and disclaimers are not Todos: their gates live in the owning repo's
+`todo.md` and scheduled tasks, and snapshots mention them in `--progress`. The
+product does not enforce this split; it is agent guidance in the skill and
+READMEs, and no schema field distinguishes watches. Agents reconcile only the
+commitments a write touches: topic finds candidates, duplicates keep their UID,
+superseded items are cancelled in the same `add`. Because `--next` and
+`--next-todo` stay mutually exclusive, keeping an existing item while adding new
+work uses `todo-add` followed by one UID-only `add`. That sequence is not atomic
+across commands, and CLI `add` commits before printing its result, so recovery
+reads back current state and complete paged history before cancelling any staged
+Todo. See [Next actions vs. watch items](requirements/next-actions-vs-watch-items.md).
+
 The domain `addStatus` accepts write-only `nextMode` and `closeTodos` options.
 Its default remains `replace`; imports reject these non-portable fields. CLI
 `add` now passes `carry`, so a plain write keeps open pins instead of clearing
