@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2 - 2026-11-03
+
+### Changed
+
+- Agent guidance (skill, `README.md`, `README_CN.md`, architecture notes): `--next` takes concrete actions only. Watch items and disclaimers go to `--progress`, with gates in the repo `todo.md` and check times in scheduled tasks. Documents reconciling touched commitments before `add`, the `todo-add` + `--next-todo` form for keeping existing work while adding new work, its failure recovery, and when a watch Todo may be retired. `--status` describes the whole project; open Todos do not keep it `active`. No CLI or schema change.
+
 ## 0.5.1 - 2026-11-02
 
 ### Added
