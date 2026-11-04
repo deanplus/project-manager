@@ -248,7 +248,7 @@ test("legacy conversion keeps indexes until every step has a Todo, then material
     ]);
     assert.equal(listTodos(db).length, 2);
     const bundle = exportLedger(db);
-    assert.equal(bundle.version, 4);
+    assert.equal(bundle.version, 5);
     assert.equal(
       "nextTodoUids" in
         bundle.entries.find((entry) => entry.uid === source.uid)!,

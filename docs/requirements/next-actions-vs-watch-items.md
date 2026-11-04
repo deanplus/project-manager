@@ -47,17 +47,21 @@ Classification test: **"If someone were free right now, could they start this an
 | Kind             | Test result                                                 | Example                                                  | Owner                                                                                                                          |
 | ---------------- | ----------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | **Action**       | Yes                                                         | "Add exponential backoff to Navi `fetchTx` on NOT_FOUND" | project-mgr Todo (`--next`)                                                                                                    |
-| **Timed action** | Yes, at a known time                                        | "Add BlockVision quota on 11-04 23:00"                   | project-mgr Todo; put the time in the title until `21b3e139` adds due dates                                                    |
+| **Timed action** | Yes, at a known time                                        | "Add BlockVision quota"                                  | project-mgr Todo via `todo-add --due-at`, then `add --next-todo`; time stays out of new titles                                 |
 | **Watch**        | No — waits on a sample, an external event, or a time window | "Wait for the first ≥$50K crash sample"                  | Repo `todo.md` (gate and evidence); a scheduled task when there is a check time. project-mgr only mentions it in `--progress`. |
 | **Disclaimer**   | Not work                                                    | "Production deploy not verified this round"              | `--progress` only                                                                                                              |
 
+The former “until `21b3e139`” title-time workaround is resolved by [Todo start/due and editing](todo-start-due-and-edit.md) (2026-11-04). Start/due never turn a watch into an action and due triggers no reminder.
+
 A watch becomes an action when its gate fires. The agent that observes the gate then records the resulting action with `--next`.
+
+A new deadline for the same deliverable/occurrence, including a deliberate reschedule, uses in-place `todo-update --due-at`, optionally followed by `add --progress` with the reason; supersede (cancel + new + pin) only when the deliverable, occurrence, or scope changes; separate renewals remain independent Todos. `todo-update` writes no snapshot or audit; the optional evidence write is a separate, non-atomic command. R2 staging recovery still applies to supersession.
 
 Reconciliation terms (R2):
 
 - **Candidate**: an open item on the same topic as the work being written. Topic only finds candidates; it never decides an outcome.
 - **Duplicate**: an item for the same deliverable or the same occurrence. "Implement the quota fallback" and "test the quota fallback" share a topic but are independent actions. Two separate quota renewals are independent occurrences.
-- **Supersede**: the new action replaces the old commitment (revised date, decision, or scope). The writer states the evidence for the replacement in `--progress`, for example the newer quota reading or the user's decision.
+- **Supersede**: the new action replaces the old commitment (a changed deliverable, occurrence, or scope; a new deadline alone is not supersession). The writer states the evidence for the replacement in `--progress`, for example the newer quota reading or the user's decision.
 
 ## Requirements
 
@@ -152,7 +156,7 @@ Candidates in other projects, to check case by case: `meme-pipeline`, `svr-watch
 
 1. The skill and both READMEs contain the classification test, the surface-ownership table, and the R2 procedure.
 2. An agent following the skill on a scenario like "wait for the first ≥$50K sample, recheck tomorrow 08:00" writes no `--next`, and its `--progress` names the gate, check time, and timer.
-3. Revised timed action: with action A kept and dated action B superseded, one new snapshot results; A keeps its UID, old B is cancelled, and open work is exactly A and the new B. Run it once with A pinned and once with A unpinned (the `todo-add` form).
+3. Changed deliverable/occurrence/scope: with action A kept and dated action B superseded, one new snapshot results; A keeps its UID, old B is cancelled, and open work is exactly A and the new B. Run it once with A pinned and once with A unpinned (the `todo-add` form).
 4. Two independent actions on one topic both stay open after a write touching that topic. An unrelated pre-existing duplicate is reported, not closed.
 5. Watch handoff: a watch with no destination stays open; a multi-gate watch with partial coverage stays open; a fully covered watch is retired, and `--progress` names the destinations without claiming the gate passed.
 6. Failure recovery for the `todo-add` form:

@@ -36,6 +36,9 @@ export type OpenWorkItem =
       pinIndex: number | null;
       createdAt: string;
       entryUid: string | null;
+      startAt: string | null;
+      dueAt: string | null;
+      content: string | null;
     }
   | {
       kind: "legacy-step";
@@ -160,6 +163,14 @@ export function openLedger(path = databasePath()): Ledger {
     ) {
       db.exec(`ALTER TABLE status_entries ADD COLUMN next_todo_uids_json TEXT;
         INSERT INTO schema_migrations(version) VALUES (5);`);
+    }
+    if (
+      !db.prepare("SELECT 1 FROM schema_migrations WHERE version = 6").get()
+    ) {
+      db.exec(`ALTER TABLE todos ADD COLUMN start_at TEXT DEFAULT NULL;
+        ALTER TABLE todos ADD COLUMN due_at TEXT DEFAULT NULL;
+        ALTER TABLE todos ADD COLUMN content TEXT DEFAULT NULL;
+        INSERT INTO schema_migrations(version) VALUES (6);`);
     }
   }).immediate();
   return db;
@@ -574,6 +585,9 @@ export function addStatus(
           status: "open",
           createdAt: recordedAt,
           completedAt: null,
+          startAt: null,
+          dueAt: null,
+          content: null,
         });
       });
       linkCompletions(db, completes, result.entry.uid, input.source);
@@ -708,6 +722,9 @@ export function openWorkByProject(
         pinIndex,
         createdAt: todo.createdAt,
         entryUid: todo.entryUid,
+        startAt: todo.startAt,
+        dueAt: todo.dueAt,
+        content: todo.content,
       });
     };
     const entry = latest.find((entry) => entry.project === name);
@@ -764,6 +781,9 @@ export function openWork(db: Ledger, project?: string): OpenWorkItem[] {
         pinIndex: null,
         createdAt: todo.createdAt,
         entryUid: todo.entryUid,
+        startAt: todo.startAt,
+        dueAt: todo.dueAt,
+        content: todo.content,
       });
   return items;
 }
@@ -1115,8 +1135,11 @@ export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
           ]);
           const version = bundle.version;
           if (
-            (version !== 2 && version !== 3 && version !== 4) ||
-            ((version === 3 || version === 4) &&
+            (version !== 2 &&
+              version !== 3 &&
+              version !== 4 &&
+              version !== 5) ||
+            ((version === 3 || version === 4 || version === 5) &&
               !Array.isArray(bundle.todos)) ||
             (version === 2 && bundle.todos !== undefined) ||
             !Array.isArray(bundle.entries) ||
@@ -1139,8 +1162,9 @@ export function importLedger(db: Ledger, values: unknown[]): InsertResult[] {
           }
           for (const event of bundle.completions)
             insertCompletion(db, validateCompletionEvent(event));
-          if (version === 3 || version === 4)
-            for (const todo of bundle.todos as unknown[]) importTodo(db, todo);
+          if (version === 3 || version === 4 || version === 5)
+            for (const todo of bundle.todos as unknown[])
+              importTodo(db, todo, version);
           for (const entry of imported)
             assertSnapshotRefs(
               db,
@@ -1176,20 +1200,20 @@ export type Todo = {
   status: "open" | "completed" | "cancelled";
   createdAt: string;
   completedAt: string | null;
+  startAt: string | null;
+  dueAt: string | null;
+  content: string | null;
 };
 const todoSelect = `SELECT uid, title, project, entry_uid AS entryUid,
-  step_index AS stepIndex, status, created_at AS createdAt, completed_at AS completedAt FROM todos`;
+  step_index AS stepIndex, status, created_at AS createdAt, completed_at AS completedAt, start_at AS startAt, due_at AS dueAt, content FROM todos`;
 
 function ledgerVersion(
   entries: { nextTodoUids?: string[]; nextStepsSourceUid?: string }[],
   todos: unknown[],
-): 2 | 3 | 4 {
+): 2 | 3 | 4 | 5 {
+  if (todos.length > 0) return 5;
   if (entries.some((entry) => entry.nextTodoUids !== undefined)) return 4;
-  if (
-    todos.length > 0 ||
-    entries.some((entry) => entry.nextStepsSourceUid !== undefined)
-  )
-    return 3;
+  if (entries.some((entry) => entry.nextStepsSourceUid !== undefined)) return 3;
   return 2;
 }
 
@@ -1342,8 +1366,8 @@ export function listTodos(
 }
 function insertTodo(db: Ledger, todo: Todo): Todo {
   db.prepare(
-    `INSERT INTO todos(uid,title,project,entry_uid,step_index,status,created_at,completed_at)
-    VALUES (?,?,?,?,?,?,?,?)`,
+    `INSERT INTO todos(uid,title,project,entry_uid,step_index,status,created_at,completed_at,start_at,due_at,content)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
     todo.uid,
     todo.title,
@@ -1353,17 +1377,73 @@ function insertTodo(db: Ledger, todo: Todo): Todo {
     todo.status,
     todo.createdAt,
     todo.completedAt,
+    todo.startAt,
+    todo.dueAt,
+    todo.content,
   );
   return todo;
 }
-export function createTodo(db: Ledger, value: unknown): Todo {
-  const input = record(value, ["title", "project", "entryUid"]);
+// Scheduling accepts second-precision instants only, unlike lifecycle parseTime.
+function todoTime(value: unknown, name: string): string | null {
+  if (value == null) return null;
   if (
-    typeof input.title !== "string" ||
-    !input.title.trim() ||
-    input.title.trim().length > 2000
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$/.test(value)
   )
+    throw new ValidationError(
+      `${name} must be an ISO timestamp with seconds and an explicit timezone`,
+    );
+  const local = value.slice(0, 19);
+  const calendar = new Date(local + "Z");
+  // Round-trip the local components to reject overflow dates, 24:00 and leap seconds.
+  if (
+    !Number.isFinite(calendar.getTime()) ||
+    calendar.toISOString().slice(0, 19) !== local ||
+    (value.length > 20 &&
+      (Number(value.slice(20, 22)) > 23 || Number(value.slice(23, 25)) > 59))
+  )
+    throw new ValidationError(`invalid ${name}`);
+  const instant = new Date(value);
+  if (!Number.isFinite(instant.getTime()))
+    throw new ValidationError(`invalid ${name}`);
+  const canonical = instant.toISOString().replace(".000Z", "Z");
+  // Keep canonical output within the same four-digit-year input contract.
+  if (canonical.length !== 20) throw new ValidationError(`invalid ${name}`);
+  return canonical;
+}
+function todoContent(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value !== "string" || value.length > 8000)
+    throw new ValidationError(
+      "content must be text of at most 8000 code units",
+    );
+  return value.trim() ? value : null;
+}
+function todoTitle(value: unknown): string {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 2000)
     throw new ValidationError("title must contain 1 to 2000 characters");
+  return value.trim();
+}
+function assertTodoSchedule(todo: Pick<Todo, "startAt" | "dueAt">): void {
+  if (todo.startAt !== null && todo.dueAt !== null && todo.startAt > todo.dueAt)
+    throw new ValidationError("startAt must not be after dueAt");
+}
+export function createTodo(db: Ledger, value: unknown): Todo {
+  const input = record(value, [
+    "title",
+    "project",
+    "entryUid",
+    "startAt",
+    "dueAt",
+    "content",
+  ]);
+  const title = todoTitle(input.title);
+  const metadata = {
+    startAt: todoTime(input.startAt, "startAt"),
+    dueAt: todoTime(input.dueAt, "dueAt"),
+    content: todoContent(input.content),
+  };
+  assertTodoSchedule(metadata);
   let project: string | null = null;
   let entryUid: string | null = null;
   if (input.project != null) {
@@ -1381,7 +1461,8 @@ export function createTodo(db: Ledger, value: unknown): Todo {
   }
   return insertTodo(db, {
     uid: randomUUID(),
-    title: input.title.trim(),
+    title,
+    ...metadata,
     project,
     entryUid,
     stepIndex: null,
@@ -1416,18 +1497,36 @@ export function convertNextStep(db: Ledger, ref: string, index: number): Todo {
         status: "open",
         createdAt: new Date().toISOString(),
         completedAt: null,
+        startAt: null,
+        dueAt: null,
+        content: null,
       });
     })
     .immediate();
 }
 export function updateTodo(db: Ledger, uid: string, value: unknown): Todo {
   validateUid(uid);
-  const input = record(value, ["status", "project"]);
+  const input = record(value, [
+    "status",
+    "project",
+    "title",
+    "content",
+    "startAt",
+    "dueAt",
+  ]);
   return db
     .transaction(() => {
       const todo = db.prepare(todoSelect + " WHERE uid = ?").get(uid) as
         Todo | undefined;
       if (!todo) throw new ValidationError("todo not found");
+      if (input.title !== undefined) todo.title = todoTitle(input.title);
+      if (input.content !== undefined)
+        todo.content = todoContent(input.content);
+      if (input.startAt !== undefined)
+        todo.startAt = todoTime(input.startAt, "startAt");
+      if (input.dueAt !== undefined)
+        todo.dueAt = todoTime(input.dueAt, "dueAt");
+      assertTodoSchedule(todo);
       if (input.status !== undefined) {
         if (
           !["open", "completed", "cancelled"].includes(input.status as string)
@@ -1462,13 +1561,22 @@ export function updateTodo(db: Ledger, uid: string, value: unknown): Todo {
         }
       }
       db.prepare(
-        "UPDATE todos SET status=?, completed_at=?, project=? WHERE uid=?",
-      ).run(todo.status, todo.completedAt, todo.project, uid);
+        "UPDATE todos SET status=?, completed_at=?, project=?, title=?, content=?, start_at=?, due_at=? WHERE uid=?",
+      ).run(
+        todo.status,
+        todo.completedAt,
+        todo.project,
+        todo.title,
+        todo.content,
+        todo.startAt,
+        todo.dueAt,
+        uid,
+      );
       return todo;
     })
     .immediate();
 }
-function importTodo(db: Ledger, value: unknown): void {
+function importTodo(db: Ledger, value: unknown, version: number): void {
   const input = record(value, [
     "uid",
     "title",
@@ -1478,7 +1586,15 @@ function importTodo(db: Ledger, value: unknown): void {
     "status",
     "createdAt",
     "completedAt",
+    ...(version === 5 ? ["startAt", "dueAt", "content"] : []),
   ]);
+  if (
+    version === 5 &&
+    ["startAt", "dueAt", "content"].some((key) => input[key] === undefined)
+  )
+    throw new ValidationError(
+      "version 5 Todos require startAt, dueAt, and content",
+    );
   validateUid(input.uid);
   if (
     typeof input.title !== "string" ||
@@ -1507,12 +1623,21 @@ function importTodo(db: Ledger, value: unknown): void {
       if (entry.nextTodoUids !== undefined) {
         if (entry.nextTodoUids[index] !== input.uid)
           throw new ValidationError("invalid next step index");
-      } else if (entry.nextSteps[index] !== input.title)
+      } else if (
+        index >= entry.nextSteps.length ||
+        (version !== 5 && entry.nextSteps[index] !== input.title)
+      )
         throw new ValidationError("invalid next step index");
     }
   } else if (input.stepIndex !== null)
     throw new ValidationError("next step requires a source");
-  const todo = input as Todo;
+  const todo = {
+    ...input,
+    startAt: todoTime(input.startAt, "startAt"),
+    dueAt: todoTime(input.dueAt, "dueAt"),
+    content: todoContent(input.content),
+  } as Todo;
+  assertTodoSchedule(todo);
   const existing = db.prepare(todoSelect + " WHERE uid = ?").get(todo.uid);
   if (existing) {
     if (!isDeepStrictEqual(existing, todo))

@@ -34,9 +34,10 @@ The CLI accepts `pmgr <action>` for `add`, `import`, `current`, `history`, `at`,
 
 ## Data model
 
-The database contains four structures:
+The database contains five structures:
 
-- `schema_migrations`: Applied migration versions (1: base tables, 2: project description & notes columns, 3: portable identities and completion events).
+- `schema_migrations`: Applied migration versions (1: base tables, 2: project description & notes columns, 3: portable identities and completion events, 4: Todos, 5: snapshot Todo refs, 6: Todo scheduling/content).
+- `todos`: Mutable work with immutable UUID/source linkage, title, status, optional planned start/deadline/content, and lifecycle times.
 - `projects`: Project slug, display name, description, notes, and creation time.
 - `status_entries`: Immutable status snapshots, stable UUIDs, and project foreign keys.
 - `completion_events`: Append-only complete/revoke events with UUIDs, source/target entry UUIDs, per-target predecessor UUIDs, recording time, author source, and optional reason.
@@ -57,7 +58,7 @@ The `project_id, occurred_at DESC, id DESC` index supports current-status and hi
 
 ## Initialization and migrations
 
-After opening the database, `openLedger()` enables foreign keys, creates the migration table, and checks for and applies migrations 1 through 5 within a `BEGIN IMMEDIATE` transaction. The immediate transaction prevents migration checks and writes from interleaving when several local processes open the database for the first time at once.
+After opening the database, `openLedger()` enables foreign keys, creates the migration table, and checks for and applies migrations 1 through 6 within a `BEGIN IMMEDIATE` transaction. The immediate transaction prevents migration checks and writes from interleaving when several local processes open the database for the first time at once.
 
 The database path is read from `PMGR_DB_PATH` first; otherwise, it uses the absolute path `~/.local/share/project-mgr/project-mgr.sqlite`, resolved from the current user's home directory. Non-memory databases create their parent directory automatically.
 
@@ -80,7 +81,7 @@ Bulk import validates all input first, then executes the same write logic for ea
 - Status at a time: take the first entry with `occurred_at <=` the specified time.
 - Same occurrence time: the later-written, larger `id` wins, keeping results deterministic.
 
-All ISO 8601 timestamps are converted to UTC on write, so SQLite string ordering matches time ordering.
+Scheduling timestamps use whole-second UTC; lifecycle timestamps retain milliseconds. Ordering is lexical only within one canonical family; compare across families by parsed instant.
 
 ## Import and export
 
@@ -113,8 +114,8 @@ New `addStatus` calls with next-step text create or reuse exact-title open Todos
 and store `nextTodoUids` in the same transaction, leaving string `nextSteps` empty. Imports do not implicitly
 create work. Legacy rows keep string `nextSteps` and leave `next_todo_uids_json`
 NULL. Todos are editable current state, while activity snapshots and their
-completion events remain append-only. Version-3 bundles include Todos without
-refs. Version-4 bundles also carry `nextTodoUids`. Conflicts, dangling refs,
+completion events remain append-only. Legacy version-3 bundles include Todos without
+refs and version-4 bundles also carry `nextTodoUids`; extended Todo exports now use version 5. Conflicts, dangling refs,
 and cross-project refs reject the entire import rather than overwrite changes.
 
 The local dashboard exposes JSON POST routes for Todo creation/update, explicit
@@ -147,7 +148,7 @@ follow in slug order, then unassigned unpinned open Todos. A pinned unassigned
 Todo is grouped under the pinning project without changing its stored ownership;
 if multiple current projects pin it, the first project in current order wins.
 Reads never create work. Only CLI `current` adds `openWork`; historical reads,
-server/dashboard contracts, schema, and portable exports remain unchanged.
+server/dashboard projections remain compatible; migration 6 and portable v5 extend Todo records as described below.
 
 Before `add`, agents run `pmgr next --project P --json`: keep work by doing
 nothing, finish it with `--done-todo`, retire superseded work with `--cancel-todo`,
@@ -178,7 +179,7 @@ open status, and resolved UIDs keep first-occurrence order when already carried.
 reuse considers prior open Todos of the project plus unassigned open Todos in
 its current pins, preferring pins, then `createdAt, uid`; provenance and
 ownership stay unchanged. Repeated new titles within the write still create
-separate Todos. Fixed-UID carry retries compare stored pins and titles rather
+separate Todos. Fixed-UID carry retries compare stored pins and live Todo titles rather
 than recomputing from current Todo statuses; portable imports retain strict
 equality.
 
@@ -188,9 +189,53 @@ fixed-UID retry of such a write therefore throws `conflicting entry uid`. This
 is accepted: CLI writes never pass fixed UIDs, and `--external-ref` replays are
 unaffected. Carry order and the strict-suffix rule are intentionally unchanged.
 
+Known limitation (L3): after a Todo rename, the original fixed-UID text payload
+fails with `conflicting entry uid`; text matching the current title can return
+the stored entry with `inserted: false`. Neither path mutates a Todo or snapshot.
+Original per-pin titles are not stored; imports retain strict portable equality,
+CLI writes never pass fixed UIDs, and `--external-ref` replay is unaffected.
+Renames are lossy for refs-format history (`nextTodos` resolves live titles),
+while legacy `nextSteps` retains its old strings. Record old wording in progress
+if it matters.
+
 Partially converted legacy carry writes preserve all strings and their effective
 source UID. New next work requires `todo-convert` or `--replace-next`. CLI
 `todo-convert --entry <ref> --index <n>`, `--project P`, and `--all` use the
 existing idempotent conversion function without appending a snapshot. Once all
 indices are converted, the next carry write materializes open refs in index
 order. `completeActivity` retains its existing pin-copying semantics.
+
+## Todo scheduling and editing (migration 6)
+
+Nullable `start_at`, `due_at`, and `content` map to `startAt`, `dueAt`, and
+`content`. Start means planned start and is independently optional from due;
+both default to null with no inference. A dedicated parser accepts whole-second
+ISO timestamps with explicit zones and emits UTC; it rejects fractions, calendar
+overflow, 24:00, leap seconds, lowercase t/z and invalid offsets (hours 00–23,
+minutes 00–59; `-00:00` is UTC). The merged row must satisfy start <= due when
+both exist. Lifecycle timestamps and status transitions are independent.
+Content is plain multiline text, at most 8,000 code units; blank maps to null.
+HTTP mutation bodies remain bounded at 32 KiB, so heavily escaped text can hit
+413 before domain validation.
+
+Updates merge supplied fields under `BEGIN IMMEDIATE`; omission preserves,
+explicit null clears nullable fields, and invalid patches write nothing.
+UID/source/index/creation/completion timestamps are not patchable; project
+ownership locks remain. Pins and carry operate on the same UID, and exact-title
+reuse follows current wording. Open-work JSON includes all three fields; `next`,
+`current`, and `todos` text append ` [due <UTC>]` for dated work only.
+
+Portable v5 requires all three keys (null allowed), normalizes metadata before
+same-UID comparison, and validates start/due ordering. Only v5 relaxes legacy
+source-title equality; source existence/project/index bounds, refs UID checks,
+and source/index uniqueness remain strict. Old formats get null metadata and
+retain title checks. Before persistent writes, back up, build the new revision,
+and restart all dashboard/writer processes. An older build can open the database
+but silently lose metadata in exports; those are not complete backups.
+
+Agent guidance: new timed actions use `todo-add --due-at` and then
+`add --next-todo`; times stay out of new titles. A new deadline for the same deliverable/occurrence, including a deliberate reschedule, uses in-place `todo-update --due-at`, optionally followed by `add --progress` with the reason; supersede (cancel + new + pin) only when the deliverable, occurrence, or scope changes; separate renewals remain independent Todos.
+Staging creation is separate from that transaction. `todo-update` writes
+no snapshot/audit: record evidence with a subsequent `add --progress`, a
+non-atomic pair. Start/due never make a watch actionable and due triggers no
+reminder; scheduled tasks still own check times.

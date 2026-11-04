@@ -103,7 +103,7 @@ A Todo is concrete work. Before writing `--next`, ask: **"If someone were free r
 | Kind         | Test result                                                | Example                                     | Where it goes                                                                                                                                                          |
 | ------------ | ---------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Action       | Yes                                                        | "Add backoff to the fetch retry"            | `--next` (a Todo)                                                                                                                                                      |
-| Timed action | Yes, at a known time                                       | "Renew the API quota on 11-04 23:00"        | `--next`; put the time in the title                                                                                                                                    |
+| Timed action | Yes, at a known time                                       | "Renew the API quota"                       | `todo-add --due-at <ISO-time>`, then `add --next-todo <uid>`; keep time out of the title                                                                               |
 | Watch        | No; waits on a sample, an external event, or a time window | "Wait for the first large-crash sample"     | Repo `todo.md` (gate and evidence) and a scheduled task when there is a check time; mention it in `--progress` (topic, gate, next check time, timer id, evidence link) |
 | Disclaimer   | Not work                                                   | "Production deploy not verified this round" | `--progress` only                                                                                                                                                      |
 
@@ -119,6 +119,18 @@ Each item has one owner. Do not copy it to every surface:
 | Scheduled task | When a check runs                                                                                            |
 | project-mgr    | The project's current actions: short titles, at most about 5 pins, linking to detail instead of repeating it |
 
+## Timed actions and edits
+
+- Use `todo-add --title "<action>" --due-at <ISO-time> [--start-at <ISO-time>]`, then pin the returned UID with `add --next-todo`. Keep dates out of new titles; do not automatically rewrite existing titles.
+- `startAt` is an optional planned start; due is independently optional. Both default to null, without inferred dates. Use seconds and an explicit timezone; output is UTC. When both exist, start must not exceed due. Neither field asserts that work started.
+- A new deadline for the same deliverable/occurrence, including a deliberate reschedule, uses in-place `todo-update --due-at`, optionally followed by `add --progress` with the reason; supersede (cancel + new + pin) only when the deliverable, occurrence, or scope changes; separate renewals remain independent Todos. Creation and the final `add` are separate transactions; use the staging recovery below.
+- `todo-update` writes no snapshot or audit record. If evidence or old wording matters, follow with `add --progress`; the edit and evidence write are not atomic. Refs-format history resolves the edited title and does not retain old wording.
+- Start/due never turn a watch into an action and due triggers no reminder. Gates stay in owning records; check times belong to scheduled tasks.
+- Keep `--content` brief; long details belong in the repository `todo.md` or an equivalent owning record.
+- `--content` accepts multiline plain text up to 8,000 code units. Blank domain/HTTP values and whitespace-only CLI content become null; `--content ""` is an error. Use `--clear-content`, `--clear-start-at`, or `--clear-due-at` to clear. Omitted fields stay unchanged; clear/value pairs conflict. Values starting with `--` are unsupported. Todos have no `--source` or author field.
+- `next`, `current`, and `todos` text append a due suffix when dated. JSON exposes start/due/content; dashboard controls are unchanged. HTTP bodies remain limited to 32 KiB, including JSON escaping.
+- Migration 6 adds nullable `start_at`, `due_at`, and `content`. Portable v5 requires all three metadata keys (null allowed), normalizes before conflict checks, and preserves source/index/UID validation. Back up, run `pnpm build` for a checkout, and restart all dashboard/writer processes before writing metadata; an old-build export can silently omit metadata and is not a complete backup.
+
 ## Daily open-work checklist
 
 Use `pmgr next --json` as the canonical daily checklist. Do not combine
@@ -131,7 +143,7 @@ remain visible as backlog. Never cancel older or similar work automatically.
 1. Run `pmgr next --project P --json`.
 2. For each action being written, find **candidates**: open items on the same topic. Topic only finds candidates; decide each one:
    - **Duplicate** (same deliverable or same occurrence) → keep the existing UID; do not create a new Todo.
-   - **Superseded** (revised date, decision, or scope) → `--cancel-todo <old>` plus the new action in the same `add`; state the evidence in `--progress`.
+   - **Superseded** (deliverable, occurrence, or scope changed; deadline-only changes keep the UID) → `--cancel-todo <old>` plus the new action in the same `add`; state the evidence in `--progress`.
    - **Independent** (for example "implement X" and "test X", or two separate renewals) → leave it open.
    - Finished → `--done-todo <uid>` with evidence for every commitment in its title.
 3. Reconcile only the commitments this write touches. Report suspected duplicates or watches on other topics in your reply and in `--progress`; do not close them.
@@ -208,5 +220,4 @@ in index order.
 Raw `nextSteps`, `nextTodoUids`, and `nextTodos` retain their existing meaning.
 `history`, `at`, and `getEntry` do not gain `openWork`; `at` does not resolve
 live Todo status. Project current state still comes from the latest snapshot.
-Export emits version 2 without Todos/refs, version 3 with Todos but no refs,
-and version 4 with refs. Import/export never carries, reuses, or closes work.
+Export emits version 5 whenever Todos are present, including null metadata; without Todos, existing version 2/3/4 selection remains. Import/export never carries, reuses, or closes work.

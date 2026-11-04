@@ -361,7 +361,7 @@ pmgr todo-update --uid <todo-uuid> --status cancelled --json
 | 类型     | 判断                               | 写到哪里                                                                         |
 | -------- | ---------------------------------- | -------------------------------------------------------------------------------- |
 | 行动     | 能                                 | `--next`（待办）                                                                 |
-| 定时行动 | 能，但在确定时间做                 | `--next`，把时间写进标题                                                         |
+| 定时行动 | 能，但在确定时间做                 | `todo-add --due-at <ISO-time>`，再 `add --next-todo <uid>`                       |
 | 观察     | 不能，要等样本、外部事件或时间窗口 | 仓库 `todo.md`（判定 gate、证据）；有复核时间时用定时任务；`--progress` 中提一句 |
 | 免责说明 | 不是工作（如“本轮未验证”）         | 只写 `--progress`                                                                |
 
@@ -376,7 +376,7 @@ pmgr todo-update --uid <todo-uuid> --status cancelled --json
 #### 每次 add 前对账
 
 1. 运行 `pmgr next --project P --json`。
-2. 对每个要写的行动，把同主题的 open 项列为候选：**重复**（同一交付物或同一次事项）保留原 UID；**被取代**（日期、决定或范围变了）在同一次 `add` 里用 `--cancel-todo` 退役，并在 `--progress` 写明依据；同主题下**相互独立**的行动保持 open。
+2. 对每个要写的行动，把同主题的 open 项列为候选：**重复**（同一交付物或同一次事项）保留原 UID；**被取代**（交付物、事项或范围变了；仅改截止时间保留原 UID）在同一次 `add` 里用 `--cancel-todo` 退役，并在 `--progress` 写明依据；同主题下**相互独立**的行动保持 open。
 3. 只对账本次写入涉及的事项；其他疑似重复或观察项只报告，不关闭。
 4. 写入后再运行 `pmgr next --project P --json`：保留或新增的 open 事项各出现一次，已完成或已取消的 UID 不再出现；需要时用 `pmgr todos --project P --json` 核对最终状态。
 
@@ -417,10 +417,38 @@ pmgr todo-convert --all --json
 待办一旦出现在任意 `nextTodoUids` 中，或关联了来源动态，就不能再改项目。
 从当前快照拿掉引用，也不会解除这个限制。
 
-带引用的导出使用 version 4，并包含被引用的待办。
-没有引用、但有待办的导出仍是 version 3。
+包含待办的导出使用 version 5（新字段为空也一样），并包含被引用的待办。
+不含待办时，保留原有 version 2/3/4 选择规则。
 version 2 和旧版导入不会凭空创建待办。
 悬空、重复、混用或跨项目引用会使整批导入失败。
 仪表板写入仍只接受同源的 localhost JSON 请求。
 动态卡片上的 **标为已完成** 会追加一条后续动态，既不完成项目，也不完成待办。
 在仪表板里新增待办不会把它钉进当前下一步；钉住需要再写一条快照。
+
+### Todo 时间与编辑
+
+`startAt` 表示可选的**计划开始时间**，不表示工作已经开始；`dueAt` 是可选截止时间。两者彼此独立，默认均为 null，不做推断默认。若两者都有，则 start 不得晚于 due。接受带显式时区、精确到整秒的 ISO 时间，例如 `2026-11-04T18:00:00+08:00`；读回为 `2026-11-04T10:00:00Z`。拒绝分数秒、缺秒/缺时区、非法日历日、闰秒和 24:00。时区偏移小时为 00–23、分钟为 00–59；`-00:00` 表示 UTC。不保存原始偏移。
+
+```sh
+pmgr todo-add --project demo --title "Review quota" \
+  --start-at 2026-11-04T18:00:00+08:00 --due-at 2026-11-04T19:00:00+08:00 \
+  --content "Check usage and record evidence" --json
+pmgr todo-update --uid <todo-uuid> --title "Review provider quota" --content "Updated detail" --json
+pmgr todo-update --uid <todo-uuid> --clear-start-at --clear-due-at --clear-content --json
+```
+
+`--content` 保持简短；长细节放进仓库的 `todo.md` 或等价归属记录。
+
+标题必填（去首尾空白，1–2000 字符）。content 为可选多行纯文本，最多 8,000 个 JavaScript code unit；空白变为 null，非空白原文保留。`--content ""` 报错，请用 `--clear-content`。领域层/HTTP 的空白 content，以及 CLI 里仅空白的 content，都会归一为 null。clear 标志与同名字段值互斥；省略的字段保持不变。CLI 不支持以 `--` 开头的参数值，也不支持从文件/stdin 读 content。
+
+按 UID 原子更新 title/content/时间/status/project。身份、来源 entry/index、以及生命周期时间戳不可改。现有项目归属锁不变。只改元数据时保留 status 与完成时间。不新增 Todo 的 source/作者字段，也不新增仪表板控件。Todo API 会返回并保留元数据：`/api/todos` 接受这些字段，关联动态的创建路径仍只收 title。所有 mutation 请求体仍限 32 KiB。8,000 个 CJK content unit 加 2,000 unit 标题可放入；重度转义的 JSON 仍可能返回 413。
+
+同一交付物/同一 occurrence 的新截止时间（含主动改期）用就地 `todo-update --due-at`，需要时可再跟一条 `add --progress` 记原因；仅当交付物、occurrence 或范围变更时才 supersede（cancel + new + pin）；独立 renewal 仍是独立 Todo。编辑不写审计/快照：若需要证据或旧文案，另用 `add --progress`（两步非原子）。新建定时行动用带元数据的 `todo-add`，再按 UID 钉住；标题里不要重复写时间。不自动改写旧标题。时间不会把观察项变成行动，也不会触发提醒。
+
+钉住、顺序与沿用规则不变。精确标题复用看当前标题，旧标题不是别名。未来/逾期的 open 工作仍然可见。`todos --json`、`next --json`、`current --json` 暴露元数据；`next`、`current`、`todos` 文本仅在有 due 时追加 ` [due <UTC>]`。
+
+migration 6 增加可空列，不做推断回填。portable v5 要求三个元数据键都在，先规范化并校验顺序，再做同 UID 比较。旧支持格式导入时元数据为 null，并保留严格的 legacy 标题校验；v5 允许已改名的 legacy 派生 Todo，但仍校验 source/index/UID。完整与按项目的 JSON/JSONL 往返保留元数据及被引用的未归属 Todo。导入保持原子；冲突报错而非覆盖。旧版 0.5.2 会拒绝 v5 文件。
+
+升级持久账本前先备份；检出目录需 `pnpm build`，并在写入元数据前重启仪表板与所有 writer。旧构建可以打开已升级数据库，但导出会丢掉元数据——那种导出不能当完整备份。本文档不表示已部署该变更。
+
+**已知限制 L3：** refs 格式快照不保存原始 Todo 标题，`history.nextTodos` 会解析为编辑后的文案；legacy `nextSteps` 仍保留原字符串。改名后，用旧文案做固定 UID 的领域文本重试会失败；用当前文案可能返回已存快照且 `inserted: false`。两条路径都不改数据。CLI 写入不传固定 UID；`--external-ref` 重放不受影响。稳定重试请优先用 UID 引用。

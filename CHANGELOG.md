@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.3 - 2026-11-04
+
+### Added
+
+- Todo planned `startAt` / `start_at` / `--start-at`, optional `dueAt`, and nullable content (8,000 code units); migration 6, atomic title/content/schedule updates, and explicit clear flags. Times require explicit zones and whole seconds, normalize to UTC, and enforce start <= due when both exist.
+- Portable v5 requires the three metadata keys, normalizes before identity comparison, and permits renamed legacy-derived Todos while preserving source/index/UID checks. Old imports default metadata to null. `openWork` JSON exposes metadata; `next`, `current`, and `todos` text append a due suffix.
+
+### Changed
+
+- Agent guidance uses `todo-add --due-at` then `add --next-todo` for new timed actions; dates stay out of titles. Deadline-only changes, including deliberate reschedules, keep the UID; supersede only when the deliverable, occurrence, or scope changes. `todo-update` writes no snapshot/audit; evidence needs a separate, non-atomic `add --progress`. Start/due never turn watches into actions and due triggers no reminder.
+- CLI clearing uses `--clear-content`; `--content ""` is an error. HTTP retains 32 KiB, including escaping. Dashboard controls and Todo authorship remain out of scope.
+- Document L3: fixed-UID text retries compare current titles after rename; old wording conflicts, current wording may return the stored snapshot without mutation. Back up, build and restart all writers before metadata writes; old-build exports omit metadata and are not complete backups. No release or deployment is implied.
+
 ## 0.5.2 - 2026-11-03
 
 ### Changed

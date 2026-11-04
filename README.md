@@ -370,7 +370,7 @@ right now, could they start this and finish it by working on it?"
 | Kind         | Test result                                       | Where it goes                                                                                       |
 | ------------ | ------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | Action       | Yes                                               | `--next` (a Todo)                                                                                   |
-| Timed action | Yes, at a known time                              | `--next`, with the time in the title                                                                |
+| Timed action | Yes, at a known time                              | `todo-add --due-at <ISO-time>`, then `add --next-todo <uid>`                                        |
 | Watch        | No; waits on a sample, an event, or a time window | Repo `todo.md` (gate, evidence) and a scheduled task for the check time; mention it in `--progress` |
 | Disclaimer   | Not work ("not verified this round")              | `--progress` only                                                                                   |
 
@@ -388,8 +388,7 @@ that restate the snapshot's own accomplishment. Each item has one owner:
 1. Run `pmgr next --project P --json`.
 2. For each action being written, list open items on the same topic as
    candidates. Keep a **duplicate** (same deliverable or occurrence) under its
-   existing UID; retire a **superseded** item (revised date, decision, or
-   scope) with `--cancel-todo` in the same `add`, stating the evidence in
+   existing UID; retire a **superseded** item (deliverable, occurrence, or scope changed; deadline-only changes keep the UID) with `--cancel-todo` in the same `add`, stating the evidence in
    `--progress`; leave **independent** actions on the same topic open.
 3. Reconcile only commitments this write touches; report other suspected
    duplicates or watches instead of closing them.
@@ -449,10 +448,76 @@ A snapshot may reference Todos that are unassigned or already in that project.
 If a Todo appears in any `nextTodoUids`, or is linked to a source entry, its
 project cannot be changed. Unpinning the current snapshot does not lift that lock.
 
-Exports that contain refs use version 4 and include every referenced Todo.
-Version 3 remains the Todo bundle without refs. Version 2 and legacy imports
+Exports containing Todos use version 5 (including null metadata) and include every referenced Todo.
+Without Todos, existing version 2/3/4 selection remains. Version 2 and legacy imports
 do not invent open work. Dangling, duplicate, mixed, or cross-project refs fail
 the whole import. Dashboard writes stay same-origin localhost JSON. Activity
 cards still offer **Mark completed**, which appends a follow-up and does not
 complete the project or its Todos. Adding a Todo from the dashboard does not
 pin it; pinning requires a new snapshot.
+
+### Todo scheduling and editing
+
+`startAt` is an optional **planned start**, not evidence that work began.
+`dueAt` is an optional deadline. Both default to null with no inferred dates;
+when both exist, start must not exceed due. Use explicit-zone ISO timestamps
+with seconds (`2026-11-04T18:00:00+08:00` or `2026-11-04T10:00:00Z`). Output
+is canonical UTC without fractions. Date-only, timezone-free, fractional,
+invalid-calendar, leap-second and 24:00 values are rejected. Offset hours must
+be 00–23 and minutes 00–59; `-00:00` is UTC. No original offset is stored.
+
+```sh
+pmgr todo-add --project demo --title "Review quota" \
+  --start-at 2026-11-04T18:00:00+08:00 \
+  --due-at 2026-11-04T19:00:00+08:00 --content "Check usage and record evidence" --json
+pmgr todo-update --uid <todo-uuid> --title "Review provider quota" --content "Updated detail" --json
+pmgr todo-update --uid <todo-uuid> --clear-start-at --clear-due-at --clear-content --json
+```
+
+Keep `--content` brief; long details belong in the repository `todo.md` or an equivalent owning record.
+
+Title stays required (trimmed, 1–2000 characters). Content is optional multiline
+plain text, limited to 8,000 JavaScript code units; empty/whitespace-only text
+becomes null, and nonblank text is preserved exactly. `--content ""` is an error; use `--clear-content`. Blank domain/HTTP content and whitespace-only CLI content normalize to null.
+Values beginning with `--` are not supported by the CLI parser; file/stdin input
+is not included. Each clear flag conflicts with its corresponding value flag.
+
+`todo-update` atomically patches title, content, start/due, status and project;
+omitted fields remain unchanged. UID, source entry/index and lifecycle timestamps
+cannot be edited. Existing project ownership locks apply. Metadata edits do not
+reopen work or reset completion time. No source/author fields are added to Todos.
+
+A new deadline for the same deliverable/occurrence, including a deliberate reschedule, uses in-place `todo-update --due-at`, optionally followed by `add --progress` with the reason; supersede (cancel + new + pin) only when the deliverable, occurrence, or scope changes; separate renewals remain independent Todos.
+Edits write no snapshot or audit trail; if evidence or old wording
+matters, follow with `add --progress` (a separate command, not an atomic pair).
+Timed actions should use `todo-add` and then pin by UID; avoid duplicating dates in
+new titles. Existing titles are not rewritten. Dates do not turn watches into
+actions and trigger no reminders: scheduled tasks still own check times.
+
+UIDs, pin order and carry behavior are unchanged. Exact-title reuse uses the
+current title; the old title is not an alias. All open Todos remain visible,
+including future/overdue work. `todos --json`, `next --json`, and
+`current --json` expose the fields; `next`, `current`, and `todos` text append ` [due <UTC>]` when due is set; undated lines are unchanged. Dashboard
+Todo APIs preserve and return metadata, but new UI controls are deferred. The
+entry-linked creation endpoint remains title-only; `/api/todos` supports metadata.
+All mutation bodies retain the 32 KiB limit. 8,000 CJK content units plus a 2,000-unit title fit; heavily escaped JSON may still return 413.
+
+Migration 6 adds nullable columns without backfilling dates. Portable v5 requires
+all three metadata keys and validates/normalizes their values before same-UID
+comparison. Older supported formats import with null metadata and retain their
+legacy-title checks; v5 permits a renamed legacy-derived Todo while preserving
+its valid source/index and all UID references. Imports remain atomic and reject
+conflicts rather than overwriting. JSON and JSONL preserve metadata, including
+project-scoped exports of referenced unassigned Todos. Old 0.5.2 rejects v5 files.
+
+Before using this change against a persistent ledger, back up, build the new
+code (`pnpm build` for a checkout), and restart the dashboard and all writers.
+An old build can open a migrated database but omit metadata from its export;
+do not treat that export as a complete backup. No deployment is implied here.
+
+**Known limitation L3:** refs-format snapshots store no original Todo title.
+Renaming is lossy; `history.nextTodos` shows current wording, while legacy
+`nextSteps` keeps its original strings. A domain fixed-UID text retry with the
+old title fails; matching the edited title can return the stored snapshot with
+`inserted: false`. Neither writes data. CLI writes use no fixed UID and
+`--external-ref` replays remain unchanged. Use UID references for stable retries.

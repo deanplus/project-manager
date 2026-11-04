@@ -33,6 +33,9 @@ const booleanFlags = new Set([
   "json",
   "clear-description",
   "clear-notes",
+  "clear-content",
+  "clear-start-at",
+  "clear-due-at",
   "open",
   "no-open",
   "help",
@@ -110,11 +113,37 @@ const allowedFlags = new Map<string, ReadonlySet<string>>([
       "json",
     ]),
   ],
-  ["todo-add", new Set(["title", "project", "entry", "json"])],
+  [
+    "todo-add",
+    new Set([
+      "title",
+      "project",
+      "entry",
+      "content",
+      "start-at",
+      "due-at",
+      "json",
+    ]),
+  ],
   ["todos", new Set(["project", "status", "json"])],
   ["next", new Set(["project", "json"])],
   ["todo-convert", new Set(["entry", "index", "project", "all", "json"])],
-  ["todo-update", new Set(["uid", "status", "project", "json"])],
+  [
+    "todo-update",
+    new Set([
+      "uid",
+      "status",
+      "project",
+      "title",
+      "content",
+      "start-at",
+      "due-at",
+      "clear-content",
+      "clear-start-at",
+      "clear-due-at",
+      "json",
+    ]),
+  ],
   ["complete", new Set(["entry", "by", "reason", "source", "json"])],
   ["revoke-completion", new Set(["entry", "by", "reason", "source", "json"])],
   ["import", new Set(["file", "json"])],
@@ -150,15 +179,15 @@ const commandHelp: Record<string, [string, string]> = {
   ],
   "todo-add": [
     "Create an independent or linked Todo",
-    "--title <text> [--project <name>] [--entry <uid>] [--json]",
+    "--title <text> [--project <name>] [--entry <uid>] [--content <text>] [--start-at <iso-time>] [--due-at <iso-time>] [--json]",
   ],
   todos: [
     "List Todos",
     "[--project <name>] [--status open|completed|cancelled] [--json]",
   ],
   "todo-update": [
-    "Change Todo status or assign a project",
-    "--uid <uuid> [--status open|completed|cancelled] [--project <name>] [--json]",
+    "Edit Todo wording, schedule, status, or project",
+    "--uid <uuid> [--title <text>] [--content <text> | --clear-content] [--start-at <iso-time> | --clear-start-at] [--due-at <iso-time> | --clear-due-at] [--status open|completed|cancelled] [--project <name>] [--json]",
   ],
   add: [
     "Append a status snapshot",
@@ -208,7 +237,16 @@ function help(action?: string): string {
       (key) =>
         `  --${key}${booleanFlags.has(key) ? "" : " <value>"}${repeats.has(key) ? " (repeatable)" : ""}`,
     );
-    return `Usage: pmgr ${action} ${usage}\n\n${description}\n\nOptions:\n${options.join("\n")}\n  -h, --help  Show this help\n`;
+    const todoHelp = [
+      "todo-add",
+      "todo-update",
+      "todos",
+      "next",
+      "current",
+    ].includes(action)
+      ? "\nFull Todo metadata is available in --json; next/current/todos text appends [due <UTC>] when dated. startAt is an optional planned start, dueAt an optional deadline; both default to null (no inferred dates). Use explicit-zone ISO timestamps with seconds, no fractions; output is UTC. When both exist, start must not exceed due. Content is multiline plain text, at most 8000 code units; blank becomes null. Empty --content is an error; use --clear-content on update. Omitted update fields are unchanged; --clear-* clears a field and conflicts with its value flag. Edits preserve UID and pins. Values beginning with -- are not supported.\n"
+      : "";
+    return `Usage: pmgr ${action} ${usage}\n\n${description}\n\nOptions:\n${options.join("\n")}\n  -h, --help  Show this help\n${todoHelp}`;
   }
   return `Usage: pmgr <command> [options]
        pmgr status <command> [options]
@@ -273,6 +311,20 @@ function stringFlag(
   return typeof value === "string" ? value : undefined;
 }
 
+function nullableTodoFlag(
+  flags: Flags,
+  name: string,
+): string | null | undefined {
+  if (flags[`clear-${name}`] === true) {
+    if (flags[name] !== undefined)
+      throw new ValidationError(
+        `cannot specify both --${name} and --clear-${name}`,
+      );
+    return null;
+  }
+  return stringFlag(flags, name);
+}
+
 function listFlag(flags: Flags, name: string): string[] {
   return (flags[name] as string[] | undefined) ?? [];
 }
@@ -295,7 +347,7 @@ function output(
     const rows = value
       .map(
         (entry) =>
-          `${entry.project}\t${entry.effectiveStatus ?? entry.status}\t${entry.occurredAt}\t${entry.summary}${entry.completedBy ? ` (completed by #${entry.completedBy.id}; original: ${entry.status})` : ""}${entry.openWork ? entry.openWork.map((item: { title: string; pinned: boolean }) => `\n  - ${item.title}${item.pinned ? " [pinned]" : ""}`).join("") : ""}`,
+          `${entry.project}\t${entry.effectiveStatus ?? entry.status}\t${entry.occurredAt}\t${entry.summary}${entry.completedBy ? ` (completed by #${entry.completedBy.id}; original: ${entry.status})` : ""}${entry.openWork ? entry.openWork.map((item: { title: string; pinned: boolean; dueAt?: string | null }) => `\n  - ${item.title}${item.pinned ? " [pinned]" : ""}${item.dueAt ? ` [due ${item.dueAt}]` : ""}`).join("") : ""}`,
       )
       .join("\n");
     write(`${rows || "No entries found."}\n`);
@@ -393,7 +445,7 @@ export function run(
               ? items
                   .map(
                     (item) =>
-                      `${item.project ?? "-"}\t${item.kind === "todo" ? item.uid : `${item.entryUid}#${item.stepIndex}`}\t${item.pinned ? "pinned" : "-"}\t${item.title}`,
+                      `${item.project ?? "-"}\t${item.kind === "todo" ? item.uid : `${item.entryUid}#${item.stepIndex}`}\t${item.pinned ? "pinned" : "-"}\t${item.title}${item.kind === "todo" && item.dueAt ? ` [due ${item.dueAt}]` : ""}`,
                   )
                   .join("\n") + "\n"
               : "No open work.\n",
@@ -449,6 +501,9 @@ export function run(
             title: stringFlag(flags, "title", true),
             project: stringFlag(flags, "project"),
             entryUid: stringFlag(flags, "entry"),
+            content: stringFlag(flags, "content"),
+            startAt: stringFlag(flags, "start-at"),
+            dueAt: stringFlag(flags, "due-at"),
           }),
           json,
           write,
@@ -477,7 +532,8 @@ export function run(
           write(
             todos
               .map(
-                (t) => `${t.uid}\t${t.status}\t${t.project ?? "-"}\t${t.title}`,
+                (t) =>
+                  `${t.uid}\t${t.status}\t${t.project ?? "-"}\t${t.title}${t.dueAt ? ` [due ${t.dueAt}]` : ""}`,
               )
               .join("\n") + "\n",
           );
@@ -486,6 +542,10 @@ export function run(
       case "todo-update":
         output(
           updateTodo(db, stringFlag(flags, "uid", true)!, {
+            title: stringFlag(flags, "title"),
+            content: nullableTodoFlag(flags, "content"),
+            startAt: nullableTodoFlag(flags, "start-at"),
+            dueAt: nullableTodoFlag(flags, "due-at"),
             status: stringFlag(flags, "status"),
             project: stringFlag(flags, "project"),
           }),
